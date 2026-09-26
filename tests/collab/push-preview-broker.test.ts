@@ -12,6 +12,7 @@ import { createServer, createConnection, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { localConfig, applicationEnvironment, connectionString, executorConnectionString, gitConnectionString } from "../../scripts/local-config";
 import { startNativeDatabase } from "../../scripts/native-database";
 import { migrate } from "../../scripts/migrate";
@@ -36,7 +37,10 @@ import { processTaskPushPreview } from "../../lib/collab/git/push-preview-broker
 import { verifyTaskPushExport } from "../../lib/collab/git/task-push-export";
 import { taskPushRef } from "../../lib/collab/git/task-push-protocol";
 import { taskPushHistory, taskPushHistoryDownload } from "../../lib/collab/git/push-preview-history";
-import { TaskPushHistoryReader } from "../../lib/collab/git/task-push-history";
+import type { TaskPushHistoryReader as HistoryReader } from "../../lib/collab/git/task-push-history";
+// Match the CommonJS service graph on Node 22; an ESM import can create a
+// second class instance, making race-injection mocks silently miss the read.
+const { TaskPushHistoryReader } = createRequire(import.meta.url)("../../lib/collab/git/task-push-history.ts") as { TaskPushHistoryReader: typeof HistoryReader };
 import { confirmTaskPush, taskPushConfirmationContext, withdrawTaskPushConfirmation } from "../../lib/collab/git/push-confirmations";
 import { githubFixture, config as githubConfig } from "./fixtures/github";
 import { githubPushFixture } from "./fixtures/github-push";
@@ -97,10 +101,11 @@ async function scenario(multiple = false) {
   const task = await createTask(users[1], project, { title: "Preview task history", description: "", acceptance: "" });
   await startRun(users[1], task.id, { repositoryId: imported.id, baseSha: imported.baseSha, prompt: "Commit using native Pi tools", expectedVersion: task.version, idempotencyKey: randomUUID() });
   const claim = await store.claim(executor, "native"); assert.ok(claim); assert.equal(claim.run.task_id, task.id);
-  assert.equal(await executeClaim(store, executor, claim, { dataRoot: directory, backend: new NativeRuntimeBackend(), driver: async agent => {
+  const outcome = await executeClaim(store, executor, claim, { dataRoot: directory, backend: new NativeRuntimeBackend(), driver: async agent => {
     if (multiple) await agent.peer.command("bash", { command: "printf 'intermediate\\n' > temporary.txt; git add temporary.txt; git commit -m 'Intermediate history'; rm temporary.txt; git add temporary.txt" });
     await agent.peer.command("bash", { command: "printf 'task committed\\n' > code.txt; git add code.txt; git commit -m 'Task preview'; printf 'remaining draft\\n' > code.txt" }); return { kind: "local-tool-fixture" };
-  } }), "completed");
+  } });
+  assert.equal(outcome, "completed", JSON.stringify((await runDetail(users[1], claim.run.id)).run.summary));
   const source = { workspaceId: claim.workspace.id, identity: { runId: claim.run.id, executorId: executor, epoch: claim.run.epoch } }, view = (await inspectWorkspaceGit(directory, source)).summary();
   const detail = await runDetail(users[1], claim.run.id), input = { idempotencyKey: randomUUID(), revision: view.revision, head: view.head, expectedRunRevision: detail.run.revision as string };
   const binding = { repositoryId: imported.id, githubRepositoryId: String(remoteId), nodeId: "R_example", ownerId: "789", ownerLogin: "example-org", name: "example-repo",
@@ -2203,8 +2208,8 @@ test("project access revoked during actual history or raw-byte reading prevents 
   try {
     const job = await s.request(), ready = await s.process();
     for (const method of ["read", "download"] as const) {
-      const original = TaskPushHistoryReader.prototype[method] as (this: TaskPushHistoryReader, raw: never) => Promise<unknown>;
-      const mocked = t.mock.method(TaskPushHistoryReader.prototype, method, async function(this: TaskPushHistoryReader, raw: never) {
+      const original = TaskPushHistoryReader.prototype[method] as (this: HistoryReader, raw: never) => Promise<unknown>;
+      const mocked = t.mock.method(TaskPushHistoryReader.prototype, method, async function(this: HistoryReader, raw: never) {
         const value = await original.call(this, raw);
         await admin.query("UPDATE collab.project_memberships SET active=false WHERE project_id=$1 AND user_id=$2", [project, users[3]]);
         return value;

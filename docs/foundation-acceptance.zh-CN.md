@@ -12,7 +12,9 @@ npm run test:collab
 npm run test:release
 ```
 
-协作测试使用独立临时数据库及真实 Git/Pi 进程。本机已有健康 PostgreSQL 时会复用服务、隔离数据库，因此测试期间不要停止持有 PostgreSQL 的主启动器。`npm test` 验证上游兼容；`test:release` 验证打包协议，不替代当前提交的生产构建、安装与重启验收。不要在正在开发的源码目录运行 `next build`。
+`npm run test:collab` 在临时目录和空闲端口启动独立 PostgreSQL，由测试主管进程统一启停；各文件再分配独立数据库，不复用开发实例。测试需要 Git、Python 3 和 OpenSSL；在 Linux 容器中复现时使用 `--init` 回收孤儿进程。`npm test` 验证上游兼容；`test:release` 验证打包协议，不替代当前提交的生产构建、安装与重启验收。不要在正在开发的源码目录运行 `next build`。
+
+CI 的浏览器验收设置 `E2E_SERVER_MODE=start`，仅在临时源码副本内构建并运行生产服务，避免开发编译占用过多内存和开发工具遮挡操作入口。生产浏览器测试使用临时证书和本机 TLS SMTP 接收器验证密码重置邮件，不放开生产环境对开发邮箱文件的限制，也不发送外部邮件。本机不设该变量时仍运行隔离的开发服务。
 
 Docker 可选，显式选择后运行：
 

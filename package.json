@@ -43,7 +43,7 @@
     "dev:upstream": "PI_COLLAB_MODE=legacy next dev -H 127.0.0.1 -p 30141",
     "test:upstream": "PI_COLLAB_MODE=legacy node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
     "test:collab:capacity": "tsx scripts/benchmark-collab.ts",
-    "test:collab": "tsx --test --test-concurrency=2 tests/collab/*.test.ts",
+    "test:collab": "tsx scripts/test-collab.ts",
     "typecheck": "tsc --noEmit",
     "test:collab:e2e": "node e2e/collab-foundation.mjs",
     "runner:docker:build": "docker build -f containers/runner.Dockerfile -t docker.io/library/pi-collab-runner:0.1.0 .",

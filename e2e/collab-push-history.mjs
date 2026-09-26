@@ -1,3 +1,4 @@
+import { openTask, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -14,7 +15,7 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
   const worker = async (mode, id) => JSON.parse((await exec(process.execPath, ['--import', 'tsx', 'scripts/e2e-push-history-worker.ts', mode, id], { timeout: 60000 })).stdout.trim());
   const headers = { Origin: base }, title = '完整出站历史审阅验收', original = owner.url();
   const memberId = (await (await memberContext.request.get(`${base}/api/collab/me`)).json()).user.id;
-  const open = async page => { await page.goto(base); await page.getByRole('button').filter({ hasText: title }).click(); };
+  const open = async page => { await page.goto(base); await openTask(page, title, 'Git 变更'); };
   const region = page => page.getByRole('region', { name: '任务推送预览', exact: true });
   try {
     const repo = await worker('init', projectId);
@@ -32,7 +33,7 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
     });
     await ui.getByRole('button', { name: '生成推送预览', exact: true }).click();
     await ui.getByRole('button', { name: '重试同一预览请求', exact: true }).waitFor();
-    await member.reload(); await member.getByRole('button').filter({ hasText: title }).click();
+    await member.reload(); await openTask(member, title, 'Git 变更');
     await ui.getByRole('button', { name: '重试同一预览请求', exact: true }).click();
     await ui.getByRole('button', { name: '重试同一预览请求', exact: true }).waitFor({ state: 'hidden' });
     const jobs = async () => (await admin.query('SELECT id,status FROM collab_git.push_previews WHERE run_id=$1 ORDER BY created_at,id', [run.runId])).rows;
@@ -80,8 +81,8 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
     await history.getByRole('button', { name: 'code.txt · 修改', exact: true }).click();
     await file.getByText(/模式 100755/).waitFor(); await file.locator('.collab-git-line.added').filter({ hasText: 'final committed code' }).waitFor();
     await history.screenshot({ path: 'test-results/collab/push-history-desktop.png' });
-    await member.setViewportSize({ width: 390, height: 844 }); await history.screenshot({ path: 'test-results/collab/push-history-mobile.png' });
-    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+    await resizeWorkspace(member, { width: 390, height: 844 }); await history.screenshot({ path: 'test-results/collab/push-history-mobile.png' });
+    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
     const confirmation = history.getByRole('region', { name: '持久推送确认', exact: true });
     const confirmationsUrl = `${api}/confirmations`, confirmationContext = await (await memberContext.request.get(confirmationsUrl)).json();
     const confirmInput = { ...confirmationContext.scope, idempotencyKey: randomUUID(), acknowledgeHistory: true, acknowledgeDestination: true, acknowledgeDisclosure: true };
@@ -106,15 +107,15 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
     await confirmation.getByRole('checkbox', { name: '确认上述仓库、可见性、任务分支及旧/新提交', exact: true }).check();
     await confirmation.getByRole('checkbox', { name: '确认披露完整新增历史（包括中间版本），已核对原始字节和排除限制；不包含后续草稿', exact: true }).check();
     await confirmation.screenshot({ path: 'test-results/collab/push-confirmation-desktop.png' });
-    await member.setViewportSize({ width: 390, height: 844 }); await confirmation.screenshot({ path: 'test-results/collab/push-confirmation-mobile.png' });
-    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+    await resizeWorkspace(member, { width: 390, height: 844 }); await confirmation.screenshot({ path: 'test-results/collab/push-confirmation-mobile.png' });
+    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
     let loseConfirmation = true;
     await member.route(`**/api/collab/push-previews/${id}/confirmations`, async route => {
       if (route.request().method() === 'POST' && loseConfirmation) { loseConfirmation = false; assert.equal((await route.fetch()).status(), 200); await route.abort('failed'); } else await route.continue();
     });
     await confirmation.getByRole('button', { name: '保存确认并占用目标', exact: true }).click();
     await confirmation.getByRole('button', { name: '重试同一推送确认操作', exact: true }).waitFor();
-    await member.reload(); await member.getByRole('button').filter({ hasText: title }).click();
+    await member.reload(); await openTask(member, title, 'Git 变更');
     await card.getByRole('button', { name: '审阅全部出站历史', exact: true }).click(); await history.getByText(/本窗口已标记 0 个文件版本/).waitFor();
     await confirmation.getByRole('button', { name: '重试同一推送确认操作', exact: true }).click();
     await confirmation.getByRole('button', { name: '重试同一推送确认操作', exact: true }).waitFor({ state: 'hidden' });
@@ -142,7 +143,7 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
     await peerConfirmation.getByRole('button', { name: '重试同一推送确认操作', exact: true }).click();
     await peerConfirmation.getByRole('status').filter({ hasText: '确认已撤回' }).waitFor();
     assert.equal((await (await ownerContext.request.get(confirmationsUrl)).json()).occupied, false);
-    await member.reload(); await member.getByRole('button').filter({ hasText: title }).click(); await card.getByRole('button', { name: '审阅全部出站历史', exact: true }).click();
+    await member.reload(); await openTask(member, title, 'Git 变更'); await card.getByRole('button', { name: '审阅全部出站历史', exact: true }).click();
     await confirmation.getByRole('status').filter({ hasText: '确认已撤回' }).waitFor();
     // New read-only requests require a deliberate new ID; cancellation does not
     // download, request a read token or make any remote write.
@@ -162,14 +163,14 @@ export async function verifyTaskPushPreviewsUi({ base, config, projectId, ownerC
     assert.equal((await memberContext.request.get(`${api}/download?${query({ kind: 'commit', commit: run.head })}`)).status(), 404);
     await history.waitFor({ state: 'hidden' });
     await worker('corrupt', id); assert.equal((await ownerContext.request.get(`${api}/history?${query({ kind: 'commits' })}`)).status(), 409);
-    await owner.reload(); await owner.getByRole('button').filter({ hasText: title }).click(); await peerCard.getByRole('button', { name: '审阅全部出站历史', exact: true }).click();
+    await owner.reload(); await openTask(owner, title, 'Git 变更'); await peerCard.getByRole('button', { name: '审阅全部出站历史', exact: true }).click();
     await peer.getByRole('alert').filter({ hasText: '固定出站历史读取失败' }).waitFor();
     await peerConfirmation.getByRole('status').filter({ hasText: '确认已撤回' }).waitFor();
     await admin.query("UPDATE collab.project_memberships SET active=true,role='developer' WHERE project_id=$1 AND user_id=$2", [projectId, memberId]);
     await verifyPushDeliveryUi({ base, projectId, ownerContext, memberContext, owner, member, repo, worker, admin });
     console.log('PASS: two-browser immutable history and full confirmation; explicit durable delivery/retry/reload/cancel, actual loopback Git receive, unknown-result permanent quarantine and role boundaries, corruption/CSRF/stale authority, desktop/mobile. No external account or model inference.');
   } catch (error) { await region(member).screenshot({ path: 'test-results/collab/push-history-failure.png', timeout: 5000 }).catch(() => {}); throw error; }
-  finally { await admin.query("UPDATE collab.project_memberships SET active=true,role='developer' WHERE project_id=$1 AND user_id=$2", [projectId, memberId]); await owner.goto(original); await admin.end(); }
+  finally { await admin.query("UPDATE collab.project_memberships SET active=true,role='developer' WHERE project_id=$1 AND user_id=$2", [projectId, memberId]); await owner.goto(original).catch(() => {}); await admin.end(); }
 }
 
 async function verifyPushDeliveryUi({ base, projectId, ownerContext, memberContext, owner, member, repo, worker, admin }) {
@@ -185,7 +186,7 @@ async function verifyPushDeliveryUi({ base, projectId, ownerContext, memberConte
     const scope = (await (await memberContext.request.get(contextUrl)).json()).scope;
     const confirmed = await memberContext.request.post(contextUrl, { headers, data: { ...scope, idempotencyKey: randomUUID(), acknowledgeHistory: true, acknowledgeDestination: true, acknowledgeDisclosure: true } });
     assert.equal(confirmed.status(), 200); const confirmationId = (await confirmed.json()).id;
-    const open = async page => { await page.goto(base); await page.getByRole('button').filter({ hasText: title }).click(); await page.getByRole('article', { name: `推送预览 ${previewId}`, exact: true }).getByRole('button', { name: '审阅全部出站历史', exact: true }).click(); };
+    const open = async page => { await page.goto(base); await openTask(page, title, 'Git 变更'); await page.getByRole('article', { name: `推送预览 ${previewId}`, exact: true }).getByRole('button', { name: '审阅全部出站历史', exact: true }).click(); };
     for (const page of [owner, member]) await open(page);
     const card = page => page.getByRole('article', { name: `推送确认 ${confirmationId}`, exact: true }), ui = card(member), peer = card(owner);
     const sendUrl = `${base}/api/collab/push-confirmations/${confirmationId}/send`, input = { idempotencyKey: randomUUID(), manifestHash: scope.manifestHash, acknowledgePush: true };
@@ -226,8 +227,8 @@ async function verifyPushDeliveryUi({ base, projectId, ownerContext, memberConte
       await peer.getByLabel('发送任务处理原因', { exact: true }).fill('接受远端仍可能迟到生效，将旧目标永久隔离，后续使用新工作区。');
       await peer.getByRole('checkbox', { name: '确认远端结果仍未知，永久隔离旧分支，并从新工作区继续', exact: true }).check();
       await peer.screenshot({ path: 'test-results/collab/push-delivery-unknown-desktop.png' });
-      await owner.setViewportSize({ width: 390, height: 844 }); await peer.screenshot({ path: 'test-results/collab/push-delivery-unknown-mobile.png' });
-      assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+      await resizeWorkspace(owner, { width: 390, height: 844 }); await peer.screenshot({ path: 'test-results/collab/push-delivery-unknown-mobile.png' });
+      assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
       await peer.getByRole('button', { name: '封存未知任务并永久隔离旧目标', exact: true }).click();
       for (const c of [ui, peer]) await c.getByRole('status').filter({ hasText: '未知任务已封存，旧目标永久隔离' }).waitFor();
       const context = await (await ownerContext.request.get(contextUrl)).json(); assert.equal(context.occupied, true); assert.equal(context.confirmations[0].status, 'quarantined');

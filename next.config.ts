@@ -26,6 +26,9 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  // The development badge covers the workbench's bottom-left account control.
+  // Error overlays remain enabled; only the floating indicator is disabled.
+  devIndicators: false,
   outputFileTracingRoot: workspaceRoot,
   turbopack: { root: workspaceRoot },
   experimental: {

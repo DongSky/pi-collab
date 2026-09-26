@@ -1,3 +1,4 @@
+import { openTask, taskAgent, showTaskPanel, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 
@@ -21,20 +22,23 @@ export async function verifyResolutionUi({base,projectId,repository,ownerContext
  const body={ownerId:b.owner_id,title,reason,idempotencyKey:randomUUID()};
  assert.equal((await ownerContext.request.post(path,{headers:{Origin:'https://untrusted.invalid'},data:body})).status(),403);
  assert.equal((await memberContext.request.post(path,{headers,data:{...body,ownerId:a.owner_id}})).status(),403);
- await owner.goto(base);await owner.getByRole('button').filter({hasText:'修复原始输入甲'}).click();
+ await owner.goto(base);await openTask(owner, '修复原始输入甲');
  const parent=owner.getByRole('article',{name:`整合 ${accepted.integrationId}`,exact:true});await parent.locator('summary').filter({hasText:'创建冲突修复任务'}).click();
  await parent.getByLabel('修复任务名称',{exact:true}).fill(title);await parent.getByLabel('修复负责人',{exact:true}).selectOption(b.owner_id);await parent.getByLabel('修复目标',{exact:true}).fill(reason);
  let lost=true;await owner.route(`**/api/collab/integrations/${accepted.integrationId}/resolution`,async route=>{if(lost){lost=false;assert.equal((await route.fetch()).status(),201);await route.abort('failed');}else await route.continue();});
  await parent.getByRole('button',{name:'确认创建修复任务',exact:true}).click();await parent.getByRole('button',{name:'重试同一修复请求',exact:true}).click();
  await parent.getByRole('button',{name:`打开修复任务：${title}`,exact:true}).click();
+ await owner.getByRole('heading',{name:title,exact:true}).waitFor();
+ await showTaskPanel(owner, '概览');
  const info=owner.getByRole('region',{name:'固定冲突修复来源',exact:true});await info.getByRole('status').filter({hasText:'修复来源当前有效'}).waitFor();assert.equal(await info.locator('li').count(),3);
  const records=(await admin.query('SELECT rt.task_id,t.owner_id FROM collab.resolution_tasks rt JOIN collab.tasks t ON t.id=rt.task_id WHERE rt.integration_id=$1',[accepted.integrationId])).rows;assert.equal(records.length,1);const taskId=records[0].task_id;assert.equal(records[0].owner_id,b.owner_id);
  const input=(await(await memberContext.request.get(`${base}/api/collab/tasks/${taskId}/resolution`)).json()).resolution.input;assert.equal(input.sources[2].taskId,c.id);assert.equal(input.policyId,policy.policyId);
  assert.equal((await memberContext.request.post(`${base}/api/collab/tasks/${taskId}/dependencies`,{headers,data:{dependsOn:a.id,kind:'soft'}})).status(),409);
- await member.goto(base);await member.getByRole('button').filter({hasText:title}).click();const run=member.getByRole('region',{name:'AI 任务运行',exact:true});
- assert.equal(await member.getByLabel('添加依赖',{exact:true}).count(),0);
- await run.getByRole('region',{name:'固定冲突修复来源',exact:true}).getByRole('status').filter({hasText:'修复来源当前有效'}).waitFor();assert.equal(await run.getByLabel('运行仓库',{exact:true}).inputValue(),repository.id);assert.equal(await run.getByLabel('运行仓库',{exact:true}).isDisabled(),true);
+ await member.goto(base);await openTask(member, title, '概览');const run=taskAgent(member);
+ assert.equal(await member.getByRole('region',{name:'AI 任务运行',exact:true}).getByLabel('添加依赖',{exact:true}).count(),0);
+ await member.getByRole('region',{name:'固定冲突修复来源',exact:true}).getByRole('status').filter({hasText:'修复来源当前有效'}).waitFor();assert.equal(await run.getByLabel('运行仓库',{exact:true}).inputValue(),repository.id);assert.equal(await run.getByLabel('运行仓库',{exact:true}).isDisabled(),true);
  await run.getByRole('button',{name:'启动 AI',exact:true}).click();await run.getByRole('status').filter({hasText:'排队中'}).waitFor();const executed=await worker('repair-run',taskId);await run.getByRole('status').filter({hasText:'本次运行结束'}).waitFor();
+ await showTaskPanel(member, '验证 / 交付');
  const snapshots=member.getByRole('region',{name:'任务交接快照',exact:true});await snapshots.getByLabel('快照交接说明',{exact:true}).fill('alpha 已明确修复为 resolved，保留后续 beta；此诊断没有二进制、重命名或删除冲突。');await snapshots.getByRole('button',{name:'保存交接快照',exact:true}).click();await snapshots.getByRole('status').filter({hasText:'等待生成快照'}).waitFor();await worker('capture');await snapshots.getByRole('status').filter({hasText:'快照可恢复'}).waitFor();
  const snapshot=(await admin.query('SELECT id FROM collab.snapshots WHERE run_id=$1',[executed.runId])).rows[0].id;
  assert.equal((await(await memberContext.request.get(`${base}/api/collab/snapshots/${snapshot}`)).json()).manifest.resolution.integrationId,accepted.integrationId);
@@ -50,8 +54,8 @@ export async function verifyResolutionUi({base,projectId,repository,ownerContext
  const candidate=(await admin.query("SELECT id FROM collab.integrations WHERE root_result_ids=ARRAY[$1]::uuid[] ORDER BY created_at DESC LIMIT 1",[resultId])).rows[0].id;assert.equal((await worker('integrate',candidate)).outcome,'checked');const card=panel.getByRole('article',{name:`整合 ${candidate}`,exact:true});await card.getByRole('status').filter({hasText:'组合检查通过'}).waitFor();
  const detail=(await(await memberContext.request.get(`${base}/api/collab/integrations/${candidate}`)).json()).integration;assert.equal(detail.sources.length,1);assert.equal(detail.review_state.reviewSatisfied,false);assert.equal(detail.evidence.validation.steps[0].exitCode,0);
  for(const context of[ownerContext,memberContext])assert.equal((await context.request.post(`${base}/api/collab/integrations/${candidate}/reviews`,{headers,data:{revisionHash:detail.review_state.revisionHash,expectedVersion:0,decision:'approve',note:'原作者和修复作者不能批准自身组合。',idempotencyKey:randomUUID()}})).status(),403);
- await owner.reload();await owner.getByRole('button').filter({hasText:title}).click();await owner.getByRole('article',{name:`整合 ${candidate}`,exact:true}).getByRole('status').filter({hasText:'组合检查通过'}).waitFor();
- await info.screenshot({path:'test-results/collab/resolution-task.png'});await results.screenshot({path:'test-results/collab/resolution-publication.png'});await member.setViewportSize({width:390,height:844});await run.getByRole('region',{name:'固定冲突修复来源',exact:true}).screenshot({path:'test-results/collab/resolution-task-mobile.png'});await results.screenshot({path:'test-results/collab/resolution-publication-mobile.png'});assert.ok(await member.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await member.setViewportSize({width:1440,height:1000});
- assert.equal((await ownerContext.request.post(`${base}/api/collab/results/${ar.resultId}/withdraw`,{headers,data:{reason:'原始成果撤回，整条修复来源链必须失效。'}})).status(),200);await run.getByRole('region',{name:'固定冲突修复来源',exact:true}).getByRole('status').filter({hasText:'修复来源已失效'}).waitFor();await card.getByRole('status').filter({hasText:'历史检查通过 · 已失效'}).waitFor();
+ await owner.reload();await openTask(owner, title);await owner.getByRole('article',{name:`整合 ${candidate}`,exact:true}).getByRole('status').filter({hasText:'组合检查通过'}).waitFor();
+ await showTaskPanel(owner, '概览');await info.screenshot({path:'test-results/collab/resolution-task.png'});await results.screenshot({path:'test-results/collab/resolution-publication.png'});await resizeWorkspace(member, {width:390,height:844});await showTaskPanel(member, '概览');await member.getByRole('region',{name:'固定冲突修复来源',exact:true}).screenshot({path:'test-results/collab/resolution-task-mobile.png'});await showTaskPanel(member, '验证 / 交付');await results.screenshot({path:'test-results/collab/resolution-publication-mobile.png'});assert.ok(await member.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await resizeWorkspace(member, {width:1440,height:1000});
+ assert.equal((await ownerContext.request.post(`${base}/api/collab/results/${ar.resultId}/withdraw`,{headers,data:{reason:'原始成果撤回，整条修复来源链必须失效。'}})).status(),200);await showTaskPanel(member, '概览');await member.getByRole('region',{name:'固定冲突修复来源',exact:true}).getByRole('status').filter({hasText:'修复来源已失效'}).waitFor();await showTaskPanel(member, '验证 / 交付');await card.getByRole('status').filter({hasText:'历史检查通过 · 已失效'}).waitFor();
  assert.ok(br.resultId);console.log('PASS: scoped assigned repair creation with lost-response retry, three fixed inputs, actual native Pi repair, required validation, human publication acknowledgement/retry, replacement composition, original-author self-approval refusal, source withdrawal and two-browser desktop/mobile UI. No model inference or target-ref writes.');
 }

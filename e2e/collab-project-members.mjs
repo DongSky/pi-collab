@@ -70,5 +70,5 @@ export async function verifyProjectMembership({ base, config, projectId, ownerCo
   await owner.setViewportSize({width:390,height:844});await owner.screenshot({path:'test-results/collab/project-members-mobile.png',fullPage:true});assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await owner.setViewportSize({width:1440,height:1000});
   console.log('PASS: project member UI add/demote/remove/regrant, scoped SSE revocation, unaffected second project, task handoff, MFA-backed emergency access and audit (protocol fixtures).');
- } finally {await member.evaluate(()=>window.__projectStream?.close());await owner.goto(original);await admin.end();await worker.end();}
+ } finally {await member.evaluate(()=>window.__projectStream?.close());await owner.goto(original).catch(() => {});await admin.end();await worker.end();}
 }

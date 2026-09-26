@@ -1,3 +1,4 @@
+import { openTeamAccountMenu } from './collab-navigation.mjs';
 import {verifyInlineIntegration} from "./collab-inline-discussions.mjs";
 import { resolveCollabSuite } from './collab-suites.mjs';
 import {verifySubtasks} from "./collab-subtasks.mjs";
@@ -62,13 +63,14 @@ try {
  await owner.getByRole('button',{name:'已保存，隐藏恢复码'}).click();
  assert.equal((await oldContext.request.get(`${base}/api/collab/me`)).status(),401);
  await owner.goto(`${base}/`);await owner.getByRole('button',{name:'＋ 新建项目',exact:true}).click();await owner.getByLabel('项目名称').fill('Identity project');await owner.getByRole('button',{name:'创建',exact:true}).click();await owner.getByRole('heading',{name:'Identity project',exact:true}).waitFor();
- await owner.getByRole('link',{name:'管理 Browser identity team'}).click();
+ await openTeamAccountMenu(owner);await owner.getByRole('link',{name:'管理 Browser identity team'}).click();
  await owner.getByLabel('受邀邮箱').fill('browser-member@pi-collab.test');await owner.getByLabel('同时加入项目').selectOption({label:'Identity project'});await owner.getByRole('button',{name:'创建邀请链接'}).click();
  const inviteURL=await owner.getByLabel('邀请链接（仅此次显示，48 小时有效）').inputValue();
  const memberContext=await browser.newContext(),member=await memberContext.newPage();await member.goto(inviteURL);await member.getByLabel('姓名',{exact:true}).fill('Browser Member');await member.getByLabel('新账户密码').fill(password);await member.getByRole('button',{name:'接受邀请'}).click();await member.getByRole('heading',{name:'已加入团队',exact:true}).waitFor();
  await signIn(member,'browser-member@pi-collab.test');await member.getByRole('heading',{name:'Identity project',exact:true}).waitFor();
  const projectId=await verifyExecutionApi({base,config,ownerContext,memberContext,owner,member});
  if (process.env.PI_COLLAB_E2E_FOCUS === 'workspace-git') {
+  console.log("CHECK: workspace Git");
   await verifyWorkspaceGitUi({base,config,projectId,owner,member,ownerContext,memberContext});
  } else if (process.env.PI_COLLAB_E2E_FOCUS === 'subtasks') {
   await verifySubtasks({base,projectId,owner,member,ownerContext,memberContext});
@@ -107,13 +109,19 @@ try {
  } else if (process.env.PI_COLLAB_E2E_FOCUS === 'project-map') {
   await verifyProjectMap({base,config,projectId,ownerContext,memberContext,owner,member});
  } else if (process.env.PI_COLLAB_E2E_FOCUS === 'push-history') {
+  console.log("CHECK: outgoing Git history");
   await verifyTaskPushPreviewsUi({base,config,projectId,ownerContext,memberContext,owner,member});
   console.log('PASS: focused outgoing-history browser acceptance (not the full identity suite).');
  } else {
+ console.log("CHECK: run controls and recovery");
  await verifyRunUi({base,config,projectId,ownerContext,memberContext,owner,member});
+ console.log("CHECK: workspace Git");
  await verifyWorkspaceGitUi({base,config,projectId,ownerContext,memberContext,owner,member});
+ console.log("CHECK: outgoing Git history");
  await verifyTaskPushPreviewsUi({base,config,projectId,ownerContext,memberContext,owner,member});
+ console.log("CHECK: snapshots and collaboration");
  await verifySnapshotUi({base,config,projectId,ownerContext,memberContext,owner,member,browser});
+ console.log("CHECK: project membership");
  await verifyProjectMembership({base,config,projectId,ownerContext,memberContext,owner,member});
  assert.equal(await member.getByRole('link',{name:'管理 Browser identity team'}).count(),0);
  const duplicate=await browser.newContext(),duplicatePage=await duplicate.newPage();await duplicatePage.goto(inviteURL);await duplicatePage.getByText('邀请已失效、被撤销或已使用。',{exact:true}).waitFor();assert.equal(await duplicatePage.getByRole('button',{name:'接受邀请'}).isDisabled(),true);
@@ -136,7 +144,7 @@ try {
  await owner.getByRole('heading',{name:'邀请记录',exact:true}).scrollIntoViewIfNeeded();
  assert.equal(await owner.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await owner.screenshot({path:'test-results/collab/identity-members-mobile.png',fullPage:true});
- await signIn(old,'browser-owner@pi-collab.test',secret);await old.getByRole('navigation',{name:'项目',exact:true}).getByRole('button').filter({hasText:'Identity project'}).click();await old.getByRole('heading',{name:'Identity project',exact:true}).waitFor();
+ await signIn(old,'browser-owner@pi-collab.test',secret);await old.getByLabel('当前项目',{exact:true}).selectOption({label:'Identity project'});await old.getByRole('heading',{name:'Identity project',exact:true}).waitFor();
  console.log('PASS: isolated full-stack browser setup, real MFA enrollment/login, invitation registration/replay, password reset, session revocation, member deactivation and last-owner protection.');
  }
 } finally {await browser.close();}

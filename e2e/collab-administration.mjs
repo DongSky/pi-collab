@@ -1,3 +1,4 @@
+import { openTeamAccountMenu } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -7,7 +8,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 export async function verifyAdministration({base,projectId,ownerContext,memberContext,owner}){
  const exec=promisify(execFile),worker=async mode=>JSON.parse((await exec(process.execPath,['--import','tsx','scripts/e2e-administration-worker.ts',mode])).stdout.trim());
  const model=JSON.parse((await exec(process.execPath,['--import','tsx','scripts/e2e-capacity-worker.ts',projectId])).stdout.trim());await worker('quarantine');
- await owner.goto(base);await owner.getByRole('link',{name:'管理 Browser identity team',exact:true}).click();const pane=owner.getByRole('region',{name:'运行与审计管理'});await pane.getByRole('button',{name:'管理模型',exact:true}).click();
+ await owner.goto(base);await openTeamAccountMenu(owner);await owner.getByRole('link',{name:'管理 Browser identity team',exact:true}).click();const pane=owner.getByRole('region',{name:'运行与审计管理'});await pane.getByRole('button',{name:'管理模型',exact:true}).click();
  await pane.getByLabel('模型操作',{exact:true}).selectOption('disable');await pane.getByLabel('模型操作说明',{exact:true}).fill('为团队停用这个验收模型并保留全部历史');await pane.getByRole('checkbox',{name:'确认此操作可能中断使用该模型的 AI',exact:true}).check();await pane.getByRole('button',{name:'提交模型操作',exact:true}).click();await pane.getByText('fixture-model · 已停用 · 本机凭据已配置 · 版本 2',{exact:true}).waitFor();
  const forbidden=await memberContext.request.post(`${base}/api/collab/models/${model.modelId}/manage`,{headers:{Origin:base},data:{action:'enable',expectedVersion:2,idempotencyKey:randomUUID(),reason:'Unprivileged model operation must be denied'}});assert.equal(forbidden.status(),403);
  await pane.getByRole('button',{name:'处理异常运行',exact:true}).click();await pane.getByLabel('处置方式',{exact:true}).selectOption('isolate');await pane.getByLabel('处置说明',{exact:true}).fill('记录旧工作区继续隔离并等待部署管理员核查进程');const [isolated]=await Promise.all([owner.waitForResponse(r=>r.url().endsWith('/disposition')&&r.request().method()==='POST'),pane.getByRole('button',{name:'提交运行处置',exact:true}).click()]);assert.ok(isolated.ok());

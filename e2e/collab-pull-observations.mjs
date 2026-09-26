@@ -1,3 +1,4 @@
+import { resizeWorkspace } from './collab-navigation.mjs';
 import { verifyPullRevisions } from './collab-pull-revisions.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
@@ -47,8 +48,8 @@ export async function verifyPullObservations({ base, changeId, projectId, member
   assert.equal((await context()).jobs.find(j => j.jobId === first).observation.snapshot.merged, false);
   assert.equal((await memberContext.request.post(route, { headers, data: input(current) })).status(), 409);
   await peer.screenshot({ path: 'test-results/collab/pull-observation-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await peer.screenshot({ path: 'test-results/collab/pull-observation-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await peer.screenshot({ path: 'test-results/collab/pull-observation-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
 
   const failed = await memberContext.request.post(route, { headers, data: input(await context()) }); assert.equal(failed.status(), 202);
   assert.equal((await worker('pull-observe-missing', (await failed.json()).jobId)).status, 'failed');

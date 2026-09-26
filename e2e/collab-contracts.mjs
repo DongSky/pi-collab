@@ -1,3 +1,4 @@
+import { openTask, taskAgent, showAgentTab, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {verifyNotesUi} from './collab-notes.mjs';
@@ -6,7 +7,7 @@ export async function verifyContractUi({base,projectId,repository,ownerContext,m
  const headers={Origin:base};
  async function create(context,title){const r=await context.request.post(`${base}/api/collab/projects/${projectId}/tasks`,{headers,data:{title,description:'明确的契约协作验收',acceptance:'使用锁定版本且旧证据不得发布'}});assert.equal(r.status(),200);return r.json();}
  const producer=await create(ownerContext,'契约生产任务'),consumer=await create(memberContext,'契约消费任务');
- await owner.goto(`${base}/`);await owner.getByRole('button').filter({hasText:'契约生产任务'}).click();
+ await owner.goto(`${base}/`);await openTask(owner, '契约生产任务', '协作约定');
  const panel=owner.getByRole('region',{name:'接口契约与确认',exact:true});await panel.getByText('创建或修订契约提案',{exact:true}).click();
  await panel.getByLabel('契约仓库',{exact:true}).selectOption(repository.id);await panel.getByLabel('契约标识',{exact:true}).fill('browser-orders');await panel.getByLabel('契约标题',{exact:true}).fill('订单响应约定 v1');
  await panel.getByLabel('接口定义',{exact:true}).fill('GET /orders returns an array of orders with numeric id.');await panel.getByLabel('契约 mock',{exact:true}).fill('[{"id":1}]');await panel.getByLabel('额外受影响任务',{exact:true}).selectOption(consumer.id);
@@ -20,7 +21,7 @@ export async function verifyContractUi({base,projectId,repository,ownerContext,m
  assert.equal((await ownerContext.request.post(`${base}/api/collab/contract-proposals/${first.id}/decisions`,{headers:{Origin:'https://untrusted.invalid'},data:decision})).status(),403);
  await proposal.getByLabel('契约确认说明 契约生产任务',{exact:true}).fill('已检查定义与示例，生产任务按此实现。');await proposal.getByRole('button',{name:'确认契约 · 契约生产任务',exact:true}).click();
  await proposal.getByRole('button',{name:'发布契约 · 订单响应约定 v1',exact:true}).click();await panel.getByRole('alert').filter({hasText:'仍有任务尚未有效确认'}).waitFor();
- await member.goto(`${base}/`);await member.getByRole('button').filter({hasText:'契约消费任务'}).click();
+ await member.goto(`${base}/`);await openTask(member, '契约消费任务', '协作约定');
  const observer=member.getByRole('region',{name:'接口契约与确认',exact:true}),consumerProposal=observer.getByRole('article',{name:'契约提案 订单响应约定 v1',exact:true});
  await consumerProposal.getByLabel('契约确认说明 契约消费任务',{exact:true}).fill('已确认消费者可以基于该接口和 mock 开发。');await consumerProposal.getByRole('button',{name:'确认契约 · 契约消费任务',exact:true}).click();
  await consumerProposal.getByText(/契约消费任务 · 已确认/).waitFor();
@@ -29,7 +30,7 @@ export async function verifyContractUi({base,projectId,repository,ownerContext,m
  await panel.getByRole('status').filter({hasText:'browser-orders · 已发布 v1'}).waitFor();
  const revision=(await admin.query('SELECT r.id,r.contract_id FROM collab.contract_revisions r WHERE proposal_id=$1',[first.id])).rows[0];
  await observer.getByRole('status').filter({hasText:'browser-orders · 已发布 v1'}).waitFor();
- const runPanel=member.getByRole('region',{name:'AI 任务运行',exact:true});await runPanel.getByLabel('运行仓库',{exact:true}).selectOption(repository.id);
+ const runPanel=taskAgent(member);await showAgentTab(member, '设置');await runPanel.getByLabel('运行仓库',{exact:true}).selectOption(repository.id);await showAgentTab(member, '对话');
  await runPanel.getByLabel('AI 任务指令',{exact:true}).fill('Read the confirmed contract mock');await runPanel.getByRole('button',{name:'启动 AI',exact:true}).click();await runPanel.getByRole('status').filter({hasText:'排队中'}).waitFor();
  const executed=await worker('contract',consumer.id);assert.equal(executed.revisionId,revision.id);
  const run=(await admin.query('SELECT revision FROM collab.runs WHERE id=$1',[executed.runId])).rows[0];
@@ -47,7 +48,7 @@ export async function verifyContractUi({base,projectId,repository,ownerContext,m
  assert.equal((await memberContext.request.post(`${base}/api/collab/tasks/${consumer.id}/results`,{headers,data:await resultBody()})).status(),409);
  const evidence=await(await memberContext.request.get(`${base}/api/collab/validations/${validation.validationId}`)).json();assert.equal(evidence.validation.evidence.contracts[0].revisionId,revision.id);
  const immutable=await memberContext.request.get(`${base}/api/collab/contract-revisions/${revision.id}`);assert.equal(immutable.status(),200);assert.equal((await immutable.json()).revision.version,1);
- await panel.screenshot({path:'test-results/collab/contracts.png'});await member.setViewportSize({width:390,height:844});await observer.screenshot({path:'test-results/collab/contracts-mobile.png'});assert.ok(await member.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await member.setViewportSize({width:1440,height:1000});
+ await panel.screenshot({path:'test-results/collab/contracts.png'});await resizeWorkspace(member, {width:390,height:844});await observer.screenshot({path:'test-results/collab/contracts-mobile.png'});assert.ok(await member.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await resizeWorkspace(member, {width:1440,height:1000});
  await verifyNotesUi({base,producer,consumer,ownerContext,memberContext,owner,member,admin});
  console.log('PASS: two-owner contract confirmation, authorization/CSRF, proposal and publication lost-response retry, immutable Pi/validation inputs, maintainer override, stale evidence rejection and responsive contract UI.');
 }

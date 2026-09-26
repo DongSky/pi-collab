@@ -1,3 +1,4 @@
+import { resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 export async function verifyPullChecks({ base, revisionId, panes: parents, member, owner, memberContext, ownerContext, worker }) {
@@ -31,8 +32,8 @@ export async function verifyPullChecks({ base, revisionId, panes: parents, membe
     await pane.getByText('build · App 41234 · 通过 · 检查 71001', { exact: true }).waitFor();
   }
   await panes[1].screenshot({ path: 'test-results/collab/pull-checks-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await panes[1].screenshot({ path: 'test-results/collab/pull-checks-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await panes[1].screenshot({ path: 'test-results/collab/pull-checks-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   assert.equal((await worker('webhook-checks', revisionId)).accepted, true);
   for (const pane of panes) { await pane.getByRole('button', { name: '刷新已有 CI 记录', exact: true }).click(); await pane.locator('[data-pull-checks="' + id + '"]').getByText('历史检查成功', { exact: false }).waitFor(); }
   await panes[0].getByRole('button', { name: '读取此版本 GitHub CI', exact: true }).click();

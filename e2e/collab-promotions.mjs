@@ -1,3 +1,4 @@
+import { openTask, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
@@ -17,7 +18,7 @@ export async function verifyPromotionUi({ base, projectId, repository, ownerCont
   assert.equal((await memberContext.request.post(`${base}/api/collab/integrations/${id}/promotions`, { headers, data: body })).status(), 403);
   assert.equal((await ownerContext.request.post(`${base}/api/collab/integrations/${id}/promotions`, { headers: { Origin: 'https://untrusted.invalid' }, data: body })).status(), 403);
   assert.equal((await ownerContext.request.post(`${base}/api/collab/integrations/${id}/promotions`, { headers, data: { ...body, acknowledgeExcluded: false } })).status(), 400);
-  for (const page of [owner, member]) { await page.goto(base); await page.getByRole('button').filter({ hasText: '整合候选乙' }).click(); }
+  for (const page of [owner, member]) { await page.goto(base); await openTask(page, '整合候选乙'); }
   const panel = owner.getByRole('region', { name: '项目 Git 整合队列', exact: true }), card = panel.getByRole('article', { name: `整合 ${id}`, exact: true });
   const peer = member.getByRole('article', { name: `整合 ${id}`, exact: true });
   await card.locator('summary').filter({ hasText: /^推进本地 Git 基线$/ }).click();
@@ -26,8 +27,8 @@ export async function verifyPromotionUi({ base, projectId, repository, ownerCont
   assert.equal(await card.getByRole('button', { name: '确认推进本地基线', exact: true }).isDisabled(), true);
   await card.getByRole('checkbox', { name: /我确认固定候选与同代码树溯源提交/ }).check();
   await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotion-confirmation.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotion-confirmation-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotion-confirmation-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   let lost = true;
   await owner.route(`**/api/collab/integrations/${id}/promotions`, async route => { if (lost) { lost = false; assert.equal((await route.fetch()).status(), 201); await route.abort('failed'); } else await route.continue(); });
   await card.getByRole('button', { name: '确认推进本地基线', exact: true }).click(); await panel.getByRole('button', { name: '重试同一整合操作', exact: true }).click();
@@ -52,9 +53,9 @@ export async function verifyPromotionUi({ base, projectId, repository, ownerCont
   const p = (await response.json()).promotion; assert.notEqual(p.promotion_sha, detail.evidence.candidateCommit); assert.equal(p.observation.targetSha, p.promotion_sha); assert.equal(p.observation.applicationEvidence, 'receipt');
   assert.equal((await admin.query('SELECT count(*)::int AS n FROM collab.repository_baselines WHERE promotion_id=$1', [promotion])).rows[0].n, 1);
   await panel.getByLabel('整合仓库', { exact: true }).selectOption(repository.id); await panel.getByText(`目标基线 ${p.promotion_sha.slice(0, 12)}`, { exact: true }).waitFor();
-  await member.reload(); await member.getByRole('button').filter({ hasText: '整合候选乙' }).click(); await peer.getByRole('status').filter({ hasText: '已推进本地基线' }).waitFor();
+  await member.reload(); await openTask(member, '整合候选乙'); await peer.getByRole('status').filter({ hasText: '已推进本地基线' }).waitFor();
   await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotions.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotions-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await card.getByRole('region', { name: '本地 Git 推进', exact: true }).screenshot({ path: 'test-results/collab/promotions-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   console.log('PASS: two-browser native promotion, maintainer/CSRF/acknowledgement gates, duplicate request protection, lost-response retry, actual Git effect with uncertain acknowledgement, explicit terminal reconciliation, baseline refresh and desktop/mobile UI.');
 }

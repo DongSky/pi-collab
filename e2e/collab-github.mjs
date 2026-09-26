@@ -1,3 +1,4 @@
+import { openTask, showAgentTab, showTaskPanel, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -22,30 +23,30 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
     const response = await context.request.get(syncsUrl); assert.equal(response.status(), 200); assert.equal(response.headers()['cache-control'], 'no-store');
     const entry = (await response.json()).syncs.find(item => item.id === fixture.synced.jobId); assert.equal(entry.outcome, 'fast_forward'); assert.equal(entry.oldSha, fixture.imported.baseSha); assert.equal(entry.remoteSha, fixture.synced.remoteSha); assert.equal('input' in entry, false);
   }
-  await member.reload(); await member.getByRole('button').filter({ hasText: '整合候选乙' }).click();
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
+  await member.reload(); await openTask(member, '整合候选乙');
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
   const info = member.getByRole('region', { name: 'GitHub 仓库关联', exact: true });
   await info.getByRole('status').filter({ hasText: '已保存远端读取核验记录' }).waitFor();
   assert.equal(await info.getByRole('link').getAttribute('href'), 'https://github.com/example-org/example-repo');
   await info.getByText(/远端可能已经变化/).waitFor(); await info.screenshot({ path: 'test-results/collab/github-binding.png' });
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
   await info.getByText(/稳定仓库编号 1012/).waitFor(); assert.equal(await info.getByRole('link').getAttribute('href'), 'https://github.com/example-org/imported-repo');
   const importPanel = member.getByRole('region', { name: 'GitHub 仓库导入', exact: true });
   const importCard = importPanel.getByRole('article', { name: '仓库导入 GitHub 真实导入仓库', exact: true });
   await importCard.getByRole('status').filter({ hasText: '已导入' }).waitFor(); await importCard.getByText(`导入提交 ${fixture.imported.baseSha}`, { exact: false }).waitFor();
   await importPanel.screenshot({ path: 'test-results/collab/github-import.png' });
-  await member.setViewportSize({ width: 390, height: 844 }); await importPanel.screenshot({ path: 'test-results/collab/github-import-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(member, { width: 390, height: 844 }); await importPanel.screenshot({ path: 'test-results/collab/github-import-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
   const syncPanel = member.getByRole('region', { name: 'GitHub 仓库同步', exact: true });
   const syncCard = syncPanel.getByRole('article', { name: /仓库同步 GitHub 真实导入仓库/ }).filter({ hasText: fixture.synced.jobId });
   await syncCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor(); await info.getByText(`当前本地基线 ${fixture.synced.remoteSha}`, { exact: false }).waitFor();
   await syncPanel.screenshot({ path: 'test-results/collab/github-sync.png' });
-  await member.setViewportSize({ width: 390, height: 844 }); await syncPanel.screenshot({ path: 'test-results/collab/github-sync-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
-  await member.setViewportSize({ width: 390, height: 844 }); await info.screenshot({ path: 'test-results/collab/github-binding-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(member, { width: 390, height: 844 }); await syncPanel.screenshot({ path: 'test-results/collab/github-sync-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
+  await resizeWorkspace(member, { width: 390, height: 844 }); await info.screenshot({ path: 'test-results/collab/github-binding-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
   // Browser submission is durable before a separate restricted-role process
   // performs I/O. No administrator connection is given to the broker core.
-  await owner.goto(base); await owner.getByRole('button').filter({ hasText: '整合候选乙' }).click();
-  await owner.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  await owner.goto(base); await openTask(owner, '整合候选乙');
+  await showAgentTab(owner, '设置');await owner.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);await showAgentTab(owner, '对话');await showTaskPanel(owner, 'Git 变更');
   const ownerSync = owner.getByRole('region', { name: 'GitHub 仓库同步', exact: true });
   const submitUrl = `${base}/api/collab/repositories/${fixture.imported.id}/github-syncs`;
   const syncBody = { expectedSha: fixture.synced.remoteSha, expectedBranch: fixture.imported.defaultBranch, acknowledge: true, reason: '由浏览器确认公共基线后请求远端安全快进。', idempotencyKey: randomUUID() };
@@ -73,7 +74,7 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
   await ownerSync.getByRole('button', { name: '重试同一同步操作', exact: true }).click();
   assert.equal(JSON.parse((await worker()).stdout.trim()).outcome, 'fast_forward');
   await brokerCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
   await info.getByText(`当前本地基线 ${fixture.browserSha}`, { exact: false }).waitFor();
   await syncPanel.getByRole('article').filter({ hasText: brokerId }).getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
   // A separate queued request can be cancelled from the same browser UI.
@@ -88,7 +89,7 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
   assert.equal(JSON.parse((await worker()).stdout.trim()).status, 'failed');
   await cancelCard.getByRole('status').filter({ hasText: '已取消，公共基线未更新' }).waitFor();
   await ownerSync.screenshot({ path: 'test-results/collab/github-broker.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await ownerSync.screenshot({ path: 'test-results/collab/github-broker-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await ownerSync.screenshot({ path: 'test-results/collab/github-broker-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   // New imports require org administration as well as project maintainership.
   // The Web process admits work; a separate restricted service downloads it.
   const importOptions = `${base}/api/collab/projects/${fixture.projectId}/github-import-options`;
@@ -123,7 +124,7 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
   const recoveredImport = JSON.parse((await worker('reconcile-import')).stdout.trim()); assert.equal(recoveredImport.status, 'completed'); assert.equal(recoveredImport.baseSha, fixture.browserSha);
   await webImportCard.getByRole('status').filter({ hasText: '已导入' }).waitFor();
   await importPanel.getByRole('article', { name: '仓库导入 浏览器导入仓库', exact: true }).getByRole('status').filter({ hasText: '已导入' }).waitFor();
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(webImport.repositoryId);
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(webImport.repositoryId);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
   await info.getByText(/稳定仓库编号 1013/).waitFor(); await info.getByText(`当前本地基线 ${fixture.browserSha}`, { exact: false }).waitFor();
   await importForm.getByLabel('GitHub 仓库数字编号', { exact: true }).fill('1014');
   await importForm.getByLabel('项目内仓库名称', { exact: true }).fill('已取消的浏览器导入');
@@ -149,8 +150,8 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
   assert.equal(JSON.parse((await worker('cancel-import')).stdout.trim()).status, 'failed');
   await abandonedCard.getByRole('status').filter({ hasText: '已取消，未发布本机仓库' }).waitFor();
   await ownerImports.screenshot({ path: 'test-results/collab/github-web-import.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await ownerImports.screenshot({ path: 'test-results/collab/github-web-import-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
-  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await ownerImports.screenshot({ path: 'test-results/collab/github-web-import-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
+  await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更');
   const body = { expectedVersion: metadata[0].version, reason: '测试停用安装授权；应保留本机代码和任务。', idempotencyKey: randomUUID() };
   assert.equal((await memberContext.request.post(disable, { headers, data: body })).status(), 403);
   assert.equal((await ownerContext.request.post(disable, { headers: { Origin: 'https://untrusted.invalid' }, data: body })).status(), 403);
@@ -168,7 +169,7 @@ export async function verifyGitHubUi({ base, repository, ownerContext, memberCon
   const afterInstallations = (await (await ownerContext.request.get(listing)).json()).installations;
   const disabled = afterInstallations.find(item => item.id === fixture.connectionId); assert.equal(disabled.version, '2'); assert.equal(disabled.enabled, false);
   for (const item of allMetadata.filter(item => item.id !== fixture.connectionId)) assert.deepEqual(afterInstallations.find(current => current.id === item.id), item);
-  await member.reload(); await member.getByRole('button').filter({ hasText: '整合候选乙' }).click(); await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id); await info.getByRole('status').filter({ hasText: '安装关联已停用' }).waitFor();
+  await member.reload(); await openTask(member, '整合候选乙'); await showAgentTab(member, '设置');await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);await showAgentTab(member, '对话');await showTaskPanel(member, 'Git 变更'); await info.getByRole('status').filter({ hasText: '安装关联已停用' }).waitFor();
   await importCard.getByRole('status').filter({ hasText: '已导入' }).waitFor();
   await syncCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
   console.log('PASS: Web import and sync/cancel/reconcile with scoped MFA/CSRF and stale baseline refusal, response-loss replay, separate Git-role process, actual SIGKILL recovery for both operations and cross-browser repository/baseline visibility; exact history and shared durable records, stale-observation labeling, scoped installation access, private material absent, disable response-loss retry, cross-browser revocation and desktop/mobile layout (isolated GitHub HTTP protocol fixture; no external account).');

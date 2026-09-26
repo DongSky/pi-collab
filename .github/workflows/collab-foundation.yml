@@ -67,6 +67,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:collab:identity:e2e
         env:
+          E2E_SERVER_MODE: start
           PI_COLLAB_E2E_FOCUS: ${{ matrix.suite }}
       # Never upload server logs: they can contain local reset URLs or tokens.
       - uses: actions/upload-artifact@v4

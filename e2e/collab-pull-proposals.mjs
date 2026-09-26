@@ -1,3 +1,4 @@
+import { resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { verifyPullDeliveryUi } from './collab-pull-delivery.mjs';
@@ -43,8 +44,8 @@ export async function verifyPullProposalsUi({ base, projectId, ownerContext, mem
   }
   assert.equal(await owner.evaluate(() => window.__pullInjected), undefined); assert.equal(await member.evaluate(() => window.__pullInjected), undefined);
   await pane(peer).screenshot({ path: 'test-results/collab/pull-proposal-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await pane(peer).screenshot({ path: 'test-results/collab/pull-proposal-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await pane(peer).screenshot({ path: 'test-results/collab/pull-proposal-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   try {
     await admin.query("UPDATE collab.project_memberships SET role='reviewer' WHERE project_id=$1 AND user_id=$2", [projectId, me]);
     assert.equal((await memberContext.request.post(route, { headers, data: input })).status(), 403);

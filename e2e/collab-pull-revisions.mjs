@@ -1,3 +1,4 @@
+import { resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { verifyPullChecks } from './collab-pull-checks.mjs';
 import { randomUUID } from 'node:crypto';
@@ -26,7 +27,7 @@ export async function verifyPullRevisions({ base, changeId, region, peer, member
     await job.locator('details[aria-label="固定 PR 代码差异"] > summary').click();
     await job.getByRole('button', { name: '读取固定 PR 文件列表', exact: true }).click();
     await job.getByRole('button', { name: '修改 · code.txt', exact: true }).click();
-    await job.getByLabel('PR 逐行代码差异', { exact: true }).getByText('+final committed code', { exact: true }).waitFor();
+    await job.getByLabel('PR 逐行代码差异', { exact: true }).locator('div').filter({ hasText: /\+final committed code\s*$/ }).waitFor();
     await job.getByRole('button', { name: '新增 · binary.bin', exact: true }).click();
     await job.getByText('未显示内容：non_text_or_large。此路径未完成代码审阅。', { exact: true }).waitFor();
     await job.getByRole('button', { name: '已排除 · .env', exact: true }).click();
@@ -39,8 +40,8 @@ export async function verifyPullRevisions({ base, changeId, region, peer, member
   assert.equal((await ownerContext.request.get(codeRoute + '/file?' + new URLSearchParams({ path: '../private', diffHash: listing.record.diffHash }))).status(), 404);
   assert.equal((await ownerContext.request.get(codeRoute + '/file?' + new URLSearchParams({ path: 'code.txt', diffHash: '0'.repeat(64) }))).status(), 409);
   await panes[1].screenshot({ path: 'test-results/collab/pull-revision-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await panes[1].screenshot({ path: 'test-results/collab/pull-revision-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await panes[1].screenshot({ path: 'test-results/collab/pull-revision-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   await member.unroute(intercept);
   await verifyPullChecks({ base, revisionId: id, panes, member, owner, memberContext, ownerContext, worker });
   const notification = await worker('webhook-code', id); assert.equal(notification.accepted, true);
@@ -49,8 +50,8 @@ export async function verifyPullRevisions({ base, changeId, region, peer, member
   assert.equal(signals.events.length, 2); assert.equal(signals.needsRefresh, true);
   const eventPane = peer.getByLabel('PR 远端变更通知', { exact: true });
   await eventPane.locator('summary').click(); await eventPane.screenshot({ path: 'test-results/collab/pull-webhooks-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await eventPane.screenshot({ path: 'test-results/collab/pull-webhooks-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await eventPane.screenshot({ path: 'test-results/collab/pull-webhooks-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   console.log('PASS: actual signed HTTP webhook delivery/replay, shared notifications, check and code invalidation, desktop/mobile.');
   console.log('PASS: explicit fixed PR capture through browser, lost-response replay, two-user diff agreement, secret/binary omissions, hash/path checks and desktop/mobile layout.');
 }

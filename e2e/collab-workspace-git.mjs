@@ -1,3 +1,4 @@
+import { openTask, resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -12,7 +13,7 @@ export async function verifyWorkspaceGitUi({ base, config, projectId, ownerConte
   const worker = async (mode, id) => JSON.parse((await exec(process.execPath, ['--import', 'tsx', 'scripts/e2e-workspace-git-worker.ts', mode, id], { timeout: 60000 })).stdout.trim());
   const headers = { Origin: base }, title = '双成员 Git 暂存提交验收', original = owner.url();
   const memberId = (await (await memberContext.request.get(`${base}/api/collab/me`)).json()).user.id;
-  const open = async page => { await page.goto(base); await page.getByRole('button').filter({ hasText: title }).click(); };
+  const open = async page => { await page.goto(base); await openTask(page, title, 'Git 变更'); };
   const panel = page => page.getByRole('region', { name: '工作区 Git', exact: true });
   const query = (revision, layer, path) => new URLSearchParams({ revision, layer, path });
   try {
@@ -39,7 +40,7 @@ export async function verifyWorkspaceGitUi({ base, config, projectId, ownerConte
       if (route.request().method() === 'POST' && lost) { lost = false; assert.equal((await route.fetch()).status(), 202); await route.abort('failed'); } else await route.continue();
     });
     await ui.getByRole('button', { name: '应用暂存选择', exact: true }).click(); await ui.getByRole('button', { name: '重试同一 Git 请求', exact: true }).waitFor();
-    await member.reload(); await member.getByRole('button').filter({ hasText: title }).click();
+    await member.reload(); await openTask(member, title, 'Git 变更');
     await ui.getByRole('button', { name: '重试同一 Git 请求', exact: true }).click(); await ui.getByText('请求已接纳。请等待下方操作记录确认，然后重新读取差异。', { exact: true }).waitFor();
     const jobs = async () => (await admin.query('SELECT id,status FROM collab_git.workspace_operations WHERE run_id=$1 ORDER BY created_at,id', [runId])).rows;
     assert.equal((await jobs()).length, 1); const stage = (await jobs())[0].id;
@@ -59,8 +60,8 @@ export async function verifyWorkspaceGitUi({ base, config, projectId, ownerConte
     assert.equal(await binary.getByRole('checkbox', { name: /暂存片段/ }).count(), 0); await binary.getByRole('checkbox', { name: '已核对暂存文件 binary.bin', exact: true }).check();
     await ui.getByRole('checkbox', { name: '确认全部暂存内容与提交说明', exact: true }).check();
     await ui.screenshot({ path: 'test-results/collab/workspace-git-confirmation.png' });
-    await member.setViewportSize({ width: 390, height: 844 }); await ui.screenshot({ path: 'test-results/collab/workspace-git-confirmation-mobile.png' });
-    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+    await resizeWorkspace(member, { width: 390, height: 844 }); await ui.screenshot({ path: 'test-results/collab/workspace-git-confirmation-mobile.png' });
+    assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
     await Promise.all([member.waitForResponse(r => r.url() === endpoint && r.request().method() === 'POST'), ui.getByRole('button', { name: '提交已暂存内容', exact: true }).click()]);
     const commit = (await jobs()).at(-1).id; assert.notEqual(commit, stage);
     assert.equal((await worker('crash', commit)).status, 'attention');
@@ -97,5 +98,5 @@ export async function verifyWorkspaceGitUi({ base, config, projectId, ownerConte
     await open(member); await ui.getByRole('article', { name: `Git 操作 ${commit}`, exact: true }).getByRole('status').filter({ hasText: '操作已应用' }).waitFor();
     await ui.screenshot({ path: 'test-results/collab/workspace-git-history.png' });
     console.log('PASS: two-browser native Git hunk/whole-file selection, excluded/binary visibility, complete staged confirmation, refresh-safe lost-response retry, contention, stale revisions, actual committed effect with SQL loss and recovery, role revocation and desktop/mobile layouts.');
-  } finally { await admin.query("UPDATE collab.project_memberships SET active=true,role='developer' WHERE project_id=$1 AND user_id=$2", [projectId, memberId]); await owner.goto(original); await admin.end(); }
+  } finally { await admin.query("UPDATE collab.project_memberships SET active=true,role='developer' WHERE project_id=$1 AND user_id=$2", [projectId, memberId]); await owner.goto(original).catch(() => {}); await admin.end(); }
 }

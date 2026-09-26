@@ -70,7 +70,7 @@ test("production SMTP delivers through certificate-verified local TLS with exact
     });
     await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as { port: number }).port;
-    await exec(process.execPath, ["--import", "tsx", "--input-type=module", "-e", "import {deliverMail} from './lib/collab/mail.ts'; await deliverMail({to:'recipient@test.invalid',subject:'Collab TLS fixture',text:'Fixed local delivery fixture'});"], {
+    await exec(process.execPath, ["--import", "tsx", "tests/collab/fixtures/deliver-mail.ts"], {
       timeout: 12000, env: { PATH: process.env.PATH, NODE_EXTRA_CA_CERTS: cert, NODE_ENV: "production", PI_COLLAB_MAIL_TRANSPORT: "smtp", SMTP_URL: `smtps://fixture:fixture@localhost:${port}`, SMTP_FROM: "sender@test.invalid" },
     });
     assert.deepEqual(envelopes, ["MAIL FROM:<sender@test.invalid>", "RCPT TO:<recipient@test.invalid>"]);

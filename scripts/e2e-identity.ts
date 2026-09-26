@@ -12,12 +12,14 @@ import { Pool } from "pg";
 import { applicationEnvironment, connectionString, dataRoot, localConfig } from "./local-config";
 import { startNativeDatabase } from "./native-database";
 import { migrate } from "./migrate";
+import { startMailFixture } from "./e2e-mail";
 
 // This runs Next from a private source copy: no shared .next, generated types,
 // development accounts, auth cookies or schema state with the active checkout.
 process.env.PI_COLLAB_E2E_FOCUS = resolveCollabSuite(process.env.PI_COLLAB_E2E_FOCUS);
 const root = process.cwd(), config = await localConfig();
 const manual = process.argv.includes("--manual");
+const productionServer = !manual && process.env.E2E_SERVER_MODE === "start";
 // The manual browser sandbox contains no real accounts or provider secrets.
 // Its public fixture token must never replace the primary instance's token.
 const fixtureConfig = manual ? { ...config, authSecret: randomBytes(32).toString("hex"), bootstrapToken: "c".repeat(64) } : config;
@@ -28,6 +30,7 @@ const runtimeDirectory = process.env.PI_COLLAB_RUNTIME === "docker" ? await mkdt
 await mkdir("test-results/collab", { recursive: true });
 const log = await open("test-results/collab/identity-server.log", "w", 0o600);
 let server: ReturnType<typeof spawn> | undefined;
+let mail: Awaited<ReturnType<typeof startMailFixture>> | undefined;
 let previews:ReturnType<typeof createHttpServer>|undefined,previewDb:Pool|undefined;
 try {
   Object.assign(process.env, applicationEnvironment(config));
@@ -36,7 +39,7 @@ try {
     await cp(path.join(root, entry), path.join(directory, entry), { recursive: true });
   }
   await symlink(path.join(root, "node_modules"), path.join(directory, "node_modules"));
-  const nextConfig = (await readFile("next.config.ts", "utf8")).replace("outputFileTracingRoot: configDir,", `outputFileTracingRoot: ${JSON.stringify(root)},\n  turbopack: { root: ${JSON.stringify(root)} },`);
+  const nextConfig = await readFile("next.config.ts", "utf8");
   await writeFile(path.join(directory, "next.config.ts"), nextConfig);
   const probe = createServer();
   await new Promise<void>(resolve => probe.listen(0, "127.0.0.1", resolve));
@@ -51,8 +54,17 @@ try {
     await new Promise<void>(resolve=>previews!.listen(0,'127.0.0.1',resolve));
     previewOrigin=`http://127.0.0.1:${(previews.address() as {port:number}).port}`;
   }
-  const env = { ...applicationEnvironment(fixtureConfig), ...(manual ? { PI_COLLAB_AUTH_COOKIE_PREFIX: databaseName } : {}), PI_COLLAB_PREVIEW_ORIGIN:previewOrigin, DATABASE_URL: connectionString(config, false, databaseName), BETTER_AUTH_URL: url, PI_COLLAB_DATA_DIR: runtimeDirectory };
-  server = spawn(process.execPath, [path.join(root, "node_modules/next/dist/bin/next"), "dev", "-H", "127.0.0.1", "-p", String(port)], { cwd: directory, env, stdio: ["ignore", log.fd, log.fd], detached: true });
+  if (productionServer) mail = await startMailFixture(runtimeDirectory);
+  const env: NodeJS.ProcessEnv = { ...applicationEnvironment(fixtureConfig), ...(productionServer ? { NODE_ENV: "production", ...mail!.env } : {}), ...(manual ? { PI_COLLAB_AUTH_COOKIE_PREFIX: databaseName } : {}), PI_COLLAB_PREVIEW_ORIGIN:previewOrigin, DATABASE_URL: connectionString(config, false, databaseName), BETTER_AUTH_URL: url, PI_COLLAB_DATA_DIR: runtimeDirectory };
+  if (productionServer) {
+    // Build only the disposable copy, never the active developer checkout.
+    console.log("Building the isolated production browser fixture...");
+    const build = spawn(process.execPath, [path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"], { cwd: directory, env, stdio: ["ignore", log.fd, log.fd] });
+    const code = await new Promise<number>((resolve, reject) => { build.once("error", reject); build.once("exit", value => resolve(value ?? 1)); });
+    if (code) throw new Error("Isolated production build failed; inspect private identity-server.log");
+    console.log("Isolated production build passed; starting browser acceptance.");
+  }
+  server = spawn(process.execPath, [path.join(root, "node_modules/next/dist/bin/next"), productionServer ? "start" : "dev", "-H", "127.0.0.1", "-p", String(port)], { cwd: directory, env, stdio: ["ignore", log.fd, log.fd], detached: true });
   const readyBy = Date.now() + 60_000;
   for (;;) {
     if (server.exitCode !== null) throw new Error("Isolated web server exited; inspect private identity-server.log");
@@ -83,6 +95,7 @@ try {
     try { process.kill(-server.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   }
   if(previews){previews.closeAllConnections();await new Promise<void>(resolve=>previews!.close(()=>resolve()));await sweepPreviews(previewDb!,runtimeDirectory);await previewDb!.end();}
+  await mail?.close();
   await log.close();
   const cleanup = new Pool({ connectionString: connectionString(config, true, "postgres") });
   const resourceAdmin = new Pool({ connectionString: connectionString(config, true, databaseName) });

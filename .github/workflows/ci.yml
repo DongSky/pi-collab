@@ -32,6 +32,8 @@ jobs:
   collab-identity:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      E2E_SERVER_MODE: start
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

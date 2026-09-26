@@ -1,3 +1,4 @@
+import { openTask, taskAgent, showAgentTab } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -15,9 +16,9 @@ export async function verifyRunUi({ base, config, projectId, ownerContext, owner
   const project=(await admin.query('SELECT organization_id FROM collab.projects WHERE id=$1',[projectId])).rows[0];
   await admin.query("INSERT INTO collab.model_profiles(id,organization_id,project_id,name,model_id,api,context_window,max_output_tokens,run_token_limit,run_request_limit) VALUES($1,$2,$3,'Browser protocol fixture','fixture-model','openai-responses',128000,512,1000000,8)",[profile,project.organization_id,projectId]);
   const response=await ownerContext.request.post(`${base}/api/collab/projects/${projectId}/tasks`,{headers,data:{title:'运行界面验收任务',description:'验证命令、输出与停止交互',acceptance:'重复提交只启动一次'}});assert.equal(response.status(),200);const task=await response.json();
-  await owner.goto(`${base}/`);await owner.getByRole('button').filter({hasText:'运行界面验收任务'}).click();
-  const panel=owner.getByRole('region',{name:'AI 任务运行'});
-  await panel.getByLabel('运行模型').selectOption(profile);await panel.getByLabel('AI 任务指令').fill('明确标记的界面协议测试，不发出模型请求。');
+  await owner.goto(`${base}/`);await openTask(owner, '运行界面验收任务');
+  const panel=taskAgent(owner);
+  await showAgentTab(owner, '设置');await panel.getByLabel('运行模型').selectOption(profile);await showAgentTab(owner, '对话');await panel.getByLabel('AI 任务指令').fill('明确标记的界面协议测试，不发出模型请求。');
   let first=true;
   await owner.route(`**/api/collab/tasks/${task.id}/runs`,async route=>{
    if(route.request().method()==='POST'&&first){first=false;const accepted=await route.fetch();assert.equal(accepted.status(),202);await route.abort('failed');}
@@ -32,23 +33,23 @@ export async function verifyRunUi({ base, config, projectId, ownerContext, owner
   await worker.query('SELECT collab_worker.append_output($1,$2,$3,$4,$5)',[executor,claim.run.id,claim.run.epoch,randomUUID(),JSON.stringify([
    {type:'assistant_text',text:'正在验证独立任务的执行流程。'},
    {type:'message_end',message:{role:'assistant',content:[{type:'text',text:'正在验证独立任务的执行流程。'}]}},
-   {type:'tool_execution_start',toolName:'write'},
-   {type:'tool_execution_end',toolName:'write',isError:false,content:[{text:'界面协议测试输出：变更等待评审。'}]}
+   {type:'tool_execution_start',toolName:'write',toolCallId:'browser-write-fixture'},
+   {type:'tool_execution_end',toolName:'write',toolCallId:'browser-write-fixture',isError:false,content:[{text:'界面协议测试输出：变更等待评审。'}]}
   ])]);
-  await panel.getByRole('status').filter({hasText:'AI 执行中'}).waitFor();await panel.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
-  await owner.reload();await owner.getByRole('button').filter({hasText:'运行界面验收任务'}).click();await panel.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
-  await member.goto(`${base}/`);await member.getByRole('button').filter({hasText:'运行界面验收任务'}).click();
-  const observer=member.getByRole('region',{name:'AI 任务运行'});await observer.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
+  await panel.getByRole('status').filter({hasText:'AI 执行中'}).waitFor();await panel.locator('details.wb-chat-tool').filter({hasText:'界面协议测试输出：变更等待评审。'}).locator('summary').click();await panel.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
+  await owner.reload();await openTask(owner, '运行界面验收任务');await panel.locator('details.wb-chat-tool').filter({hasText:'界面协议测试输出：变更等待评审。'}).locator('summary').click();await panel.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
+  await member.goto(`${base}/`);await openTask(member, '运行界面验收任务');
+  const observer=taskAgent(member);await observer.locator('details.wb-chat-tool').filter({hasText:'界面协议测试输出：变更等待评审。'}).locator('summary').click();await observer.getByText('界面协议测试输出：变更等待评审。',{exact:true}).waitFor();
   assert.equal(await observer.getByRole('button',{name:'启动 AI',exact:true}).count(),0);assert.equal(await observer.getByRole('button',{name:'停止运行'}).count(),0);
   await mkdir('test-results/collab',{recursive:true});await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-ui.png',fullPage:true});
-  await owner.setViewportSize({width:390,height:844});await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-ui-mobile.png',fullPage:true});
+  await owner.setViewportSize({width:390,height:844});await owner.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await panel.waitFor({state:"visible"});await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-ui-mobile.png',fullPage:true});
   assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
-  await owner.setViewportSize({width:1440,height:1000});
+  await owner.setViewportSize({width:1440,height:1000});await owner.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await panel.waitFor({state:"visible"});
   await panel.getByRole('button',{name:'停止运行'}).click();await panel.getByRole('status').filter({hasText:'正在停止'}).waitFor();
   assert.equal((await worker.query('SELECT collab_worker.heartbeat($1,$2,$3) AS result',[executor,claim.run.id,claim.run.epoch])).rows[0].result.canExecute,false);
   await worker.query('SELECT collab_worker.finish($1,$2,$3,$4,$5)',[executor,claim.run.id,claim.run.epoch,'cancelled',JSON.stringify({kind:'browser-protocol-fixture'})]);
   await panel.getByRole('status').filter({hasText:'已停止'}).waitFor();
-  await panel.getByLabel('运行处理原因').fill('浏览器验收归档保留文件与运行历史。');
+  await panel.locator('summary').filter({hasText:/^运行维护操作$/}).click();await panel.getByLabel('运行处理原因').fill('浏览器验收归档保留文件与运行历史。');
   await panel.getByRole('button',{name:'归档工作区',exact:true}).click();
   await panel.getByRole('status').filter({hasText:'工作区已归档'}).waitFor();
   assert.equal((await admin.query('SELECT status FROM collab.workspaces WHERE id=$1',[claim.workspace.id])).rows[0].status,'archived');
@@ -69,7 +70,7 @@ export async function verifyRunUi({ base, config, projectId, ownerContext, owner
    if(firstRecovery){firstRecovery=false;const accepted=await route.fetch();assert.equal(accepted.status(),202);await route.abort('failed');}
    else await route.continue();
   });
-  await panel.getByLabel('运行处理原因').fill('核对旧进程退出证据并保留未知命令。');
+  await panel.locator('summary').filter({hasText:/^运行维护操作$/}).click();await panel.getByLabel('运行处理原因').fill('核对旧进程退出证据并保留未知命令。');
   await panel.getByRole('button',{name:'检查旧进程并解除阻塞'}).click();
   await panel.getByRole('button',{name:'重试同一处理请求'}).click();
   await panel.getByText('等待执行器核对进程退出证据…',{exact:true}).waitFor();
@@ -84,12 +85,12 @@ export async function verifyRunUi({ base, config, projectId, ownerContext, owner
   await panel.getByRole('status').filter({hasText:'已停止'}).waitFor();
   await panel.getByText('执行器已记录进程退出。原命令的外部副作用仍需人工核对。',{exact:true}).waitFor();
   assert.equal((await admin.query("SELECT status FROM collab.commands WHERE run_id=$1 AND kind='start'",[recoveryClaim.run.id])).rows[0].status,'unknown');
-  await owner.reload();await owner.getByRole('button').filter({hasText:'运行界面验收任务'}).click();
+  await owner.reload();await openTask(owner, '运行界面验收任务');
   await panel.getByText('执行器已记录进程退出。原命令的外部副作用仍需人工核对。',{exact:true}).waitFor();
   await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-recovery.png',fullPage:true});
-  await owner.setViewportSize({width:390,height:844});await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-recovery-mobile.png',fullPage:true});
-  assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await owner.setViewportSize({width:1440,height:1000});
+  await owner.setViewportSize({width:390,height:844});await owner.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await panel.waitFor({state:"visible"});await panel.scrollIntoViewIfNeeded();await owner.screenshot({path:'test-results/collab/run-recovery-mobile.png',fullPage:true});
+  assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await owner.setViewportSize({width:1440,height:1000});await owner.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await panel.waitFor({state:"visible"});
   console.log('PASS: run UI selection, lost-response retry, durable output after reload, observer permissions, stop confirmation and mobile layout (protocol fixtures).');
   console.log('PASS: archival, recovery lost-response retry, missing evidence isolation, scoped/CSRF rejection, unknown-command preservation and refresh replay (protocol fixtures).');
- } finally {await owner.goto(original);await admin.end();await worker.end();}
+ } finally {await owner.goto(original).catch(() => {});await admin.end();await worker.end();}
 }

@@ -333,7 +333,7 @@ test("managed revert binds a promoted delta, runs real Pi on an inverse commit, 
 test("a divergent target after historical application remains blocked and is never adopted or reset", async () => {
   const c = await promotion(); await prepareLocalPromotion(root, c.input, signal()); assert.equal(await store.admitPromotion(c), true);
   await applyLocalPromotion(root, c.input, signal());
-  const divergent = await git("commit-tree", c.input.candidateTree, "-p", c.promotionSha, "-m", "Out of band descendant");
+  const divergent = await git("-c", "user.name=Promotion fixture", "-c", "user.email=promotion@test.invalid", "commit-tree", c.input.candidateTree, "-p", c.promotionSha, "-m", "Out of band descendant");
   await git("update-ref", `refs/heads/${c.input.targetBranch}`, divergent, c.promotionSha);
   const observed = await abortLocalPromotion(root, c.input, signal()); assert.equal(observed.decision, "applied");
   assert.equal(await store.finishPromotion(c, observed, null), "blocked");

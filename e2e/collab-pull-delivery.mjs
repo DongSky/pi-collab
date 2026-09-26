@@ -1,3 +1,4 @@
+import { resizeWorkspace } from './collab-navigation.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { verifyPullObservations } from './collab-pull-observations.mjs';
@@ -31,8 +32,8 @@ export async function verifyPullDeliveryUi({ base, projectId, ownerContext, memb
     assert.equal(await submit.isDisabled(), false);
     if (capture) {
       await region.screenshot({ path: 'test-results/collab/pull-creation-confirm-desktop.png' });
-      await member.setViewportSize({ width: 390, height: 844 }); await region.screenshot({ path: 'test-results/collab/pull-creation-confirm-mobile.png' });
-      assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+      await resizeWorkspace(member, { width: 390, height: 844 }); await region.screenshot({ path: 'test-results/collab/pull-creation-confirm-mobile.png' });
+      assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(member, { width: 1440, height: 1000 });
     }
     await submit.click();
   };
@@ -72,8 +73,8 @@ export async function verifyPullDeliveryUi({ base, projectId, ownerContext, memb
   for (const root of [ui, peer]) assert.equal(await pane(root, first.id).getByRole('link', { name: '打开已创建 PR #17', exact: true }).getAttribute('href'), 'https://github.com/example-org/example-repo/pull/17');
   await pane(peer, first.id).getByText('创建与版本观察记录', { exact: true }).click();
   await pane(peer, first.id).screenshot({ path: 'test-results/collab/pull-creation-desktop.png' });
-  await owner.setViewportSize({ width: 390, height: 844 }); await pane(peer, first.id).screenshot({ path: 'test-results/collab/pull-creation-mobile.png' });
-  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await resizeWorkspace(owner, { width: 390, height: 844 }); await pane(peer, first.id).screenshot({ path: 'test-results/collab/pull-creation-mobile.png' });
+  assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await resizeWorkspace(owner, { width: 1440, height: 1000 });
   await member.unroute(intercept);
   await verifyPullObservations({ base, changeId: first.id, projectId, memberId, ownerContext, memberContext, owner, member,
     root: pane(ui, first.id), peerRoot: pane(peer, first.id), worker, admin,

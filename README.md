@@ -183,9 +183,13 @@ npm run dev:local
 ```bash
 npm run typecheck
 npm run lint
+npm test
+npm run test:collab
 npm run test:pi-install
 npm run test:release
 ```
+
+`test:collab` 自动在临时目录和空闲端口启动测试数据库，由统一进程管理其生命周期；各测试文件使用独立数据库，退出后清理，不依赖正在运行的开发实例。可用 `npm run test:collab -- tests/collab/foundation.test.ts` 运行指定文件。测试需要 Git、Python 3 和 OpenSSL；在容器中复现时使用 `--init`，以正确回收进程退出与故障恢复测试创建的子进程。
 
 对独立安装目录验证初始化、停机、端口切换和账户持久化：
 
