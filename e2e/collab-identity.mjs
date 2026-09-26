@@ -144,7 +144,8 @@ try {
  await owner.getByRole('heading',{name:'邀请记录',exact:true}).scrollIntoViewIfNeeded();
  assert.equal(await owner.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await owner.screenshot({path:'test-results/collab/identity-members-mobile.png',fullPage:true});
- await signIn(old,'browser-owner@pi-collab.test',secret);await old.getByLabel('当前项目',{exact:true}).selectOption({label:'Identity project'});await old.getByRole('heading',{name:'Identity project',exact:true}).waitFor();
+ await signIn(old,'browser-owner@pi-collab.test',secret);await old.getByLabel('当前项目',{exact:true}).selectOption({label:'Identity project'});await old.locator('.wb-title-project').filter({hasText:/^Identity project$/}).waitFor();
+ assert.equal(await old.getByLabel('当前项目',{exact:true}).inputValue(),projectId);assert.equal((await oldContext.request.get(`${base}/api/collab/projects/${projectId}`)).status(),200);
  console.log('PASS: isolated full-stack browser setup, real MFA enrollment/login, invitation registration/replay, password reset, session revocation, member deactivation and last-owner protection.');
  }
 } finally {await browser.close();}
