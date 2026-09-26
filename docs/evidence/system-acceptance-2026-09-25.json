@@ -1,0 +1,90 @@
+{
+  "date": "2026-09-25",
+  "productCommit": "93123ee2b8b99d3a2f4a474fc5ee20ccc0c18d7a",
+  "platform": "darwin-arm64",
+  "installedArtifact": "/tmp/pi-collab-installed-93123ee",
+  "scope": "Implemented local single-node system; no external production acceptance",
+  "checks": {
+    "collaboration": {
+      "log": "/tmp/pi-collab-ui-full-suite.log",
+      "sha256": "933abd6cdefc41b1448e30abbe2bf3bc8d98e8e3ce744ee89e7d52ae59b6373e",
+      "tests": 635,
+      "pass": 631,
+      "fail": 0,
+      "skipped": 4,
+      "duration_ms": 1632354.342208
+    },
+    "upstream": {
+      "log": "/tmp/pi-collab-workbench-upstream.log",
+      "sha256": "be2829effb4e98eca515bc22e8b32d80b0e1ec10d9a491ad51e25c7ba137e28c",
+      "tests": 1292,
+      "pass": 1292,
+      "fail": 0,
+      "skipped": 0,
+      "duration_ms": 5798.533083
+    },
+    "docker": {
+      "log": "/tmp/pi-collab-workbench-docker-regressions.log",
+      "sha256": "4c3e67f965349e6a9452a9905c9c8d4b04bd7941e9321944e34dc64b9004c1fc",
+      "tests": 36,
+      "pass": 36,
+      "fail": 0,
+      "skipped": 0,
+      "duration_ms": 225051.656625
+    },
+    "packaging": {
+      "log": "/tmp/pi-collab-workbench-packaging-tests.log",
+      "sha256": "92435cc07d381bd8c42794248bb8c5c65aec0e833049cd32a4b22e5821d7d71f",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skipped": 0,
+      "duration_ms": 1391.63225
+    },
+    "typecheck": {
+      "log": "/tmp/pi-collab-ui-types.log",
+      "sha256": "7be29671bde4f049d366d9e6cbfa9af5316940c379cb57501de2e7c285426362"
+    },
+    "lint": {
+      "log": "/tmp/pi-collab-ui-lint.log",
+      "sha256": "597ea044475480d5869476f9e3557f6101d8866b4acc31b3b87063fa23562397"
+    },
+    "build": {
+      "log": "/tmp/pi-collab-workbench-93123ee-build.log",
+      "sha256": "bcae72bf46372bea56067be32d59801834799f8fda93a653fbd9d5e1244fcaf4"
+    },
+    "install": {
+      "log": "/tmp/pi-collab-workbench-93123ee-install.log",
+      "sha256": "6a01f76d80a7df23904a98cc8ff4b1f098ffc942eb9f360a8812190cf2295ea8"
+    },
+    "productionNative": {
+      "log": "/tmp/pi-collab-workbench-93123ee-native.log",
+      "sha256": "aa196f43911d24e21bd526b486c771c9bdd9a274d21763810412950155529f87",
+      "passed": true
+    },
+    "productionDocker": {
+      "log": "/tmp/pi-collab-workbench-93123ee-docker.log",
+      "sha256": "a5f968115c9b9a58c1b7a427f52acf29f1b1748051d8924eb10ab6fa0e8c9b5f",
+      "passed": true
+    }
+  },
+  "conditionalSkipsCoveredByDocker": 4,
+  "computerUse": {
+    "browsers": [
+      "Chrome",
+      "Safari"
+    ],
+    "viewportWidths": [
+      390,
+      768,
+      1280,
+      1440
+    ],
+    "browserZoomPercent": 200,
+    "delayedStartAndHandoffRun": "0028ae8e-3771-40a0-90cc-5d216b7447a5",
+    "runStatus": "completed",
+    "durableStartCommands": 1,
+    "screenshots": "Current task Computer Use tool records",
+    "details": "docs/ui-modernization.zh-CN.md"
+  }
+}

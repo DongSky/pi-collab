@@ -1,0 +1,22 @@
+# Substitute your two DNS names and config.json ports. Caddy terminates HTTPS;
+# all application/database/gateway services stay on loopback. No access logs:
+# preview paths contain short-lived capabilities.
+collab.example.com {
+    reverse_proxy 127.0.0.1:30142 {
+        flush_interval -1
+    }
+}
+preview.example.net {
+    @preview path /preview/* /service/*
+    handle @preview {
+        reverse_proxy 127.0.0.1:30143 {
+            header_up -Cookie
+            header_up -Authorization
+            header_down -Set-Cookie
+        }
+    }
+    # Never publish /v1 or coordination/resource/model gateway routes.
+    handle {
+        respond "Not found" 404
+    }
+}

@@ -1,0 +1,175 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const exec = promisify(execFile);
+export async function verifyGitHubUi({ base, repository, ownerContext, memberContext, owner, member }) {
+  const fixture = JSON.parse((await exec(process.execPath, ['--import', 'tsx', 'scripts/e2e-github.ts', repository.id], { timeout: 60000 })).stdout.trim());
+  const headers = { Origin: base };
+  const listing = `${base}/api/collab/organizations/${fixture.organizationId}/github-installations`, disable = `${base}/api/collab/github-installations/${fixture.connectionId}/disable`;
+  assert.equal((await memberContext.request.get(listing)).status(), 403);
+  const result = await ownerContext.request.get(listing); assert.equal(result.status(), 200); assert.equal(result.headers()['cache-control'], 'no-store');
+  const allMetadata = (await result.json()).installations, metadata = allMetadata.filter(item => item.id === fixture.connectionId);
+  assert.equal(metadata.length, 1);
+  for (const item of allMetadata) { assert.equal('sealed' in item, false); assert.equal('token' in item, false); }
+  const importsUrl = `${base}/api/collab/projects/${fixture.projectId}/github-imports`;
+  for (const context of [ownerContext, memberContext]) {
+    const response = await context.request.get(importsUrl); assert.equal(response.status(), 200); assert.equal(response.headers()['cache-control'], 'no-store');
+    const entry = (await response.json()).imports.find(item => item.id === fixture.imported.jobId); assert.equal(entry.status, 'completed'); assert.equal(entry.repositoryId, fixture.imported.id); assert.equal(entry.baseSha, fixture.imported.baseSha); assert.equal('request' in entry, false);
+  }
+  const syncsUrl = `${base}/api/collab/projects/${fixture.projectId}/github-syncs`;
+  for (const context of [ownerContext, memberContext]) {
+    const response = await context.request.get(syncsUrl); assert.equal(response.status(), 200); assert.equal(response.headers()['cache-control'], 'no-store');
+    const entry = (await response.json()).syncs.find(item => item.id === fixture.synced.jobId); assert.equal(entry.outcome, 'fast_forward'); assert.equal(entry.oldSha, fixture.imported.baseSha); assert.equal(entry.remoteSha, fixture.synced.remoteSha); assert.equal('input' in entry, false);
+  }
+  await member.reload(); await member.getByRole('button').filter({ hasText: '整合候选乙' }).click();
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
+  const info = member.getByRole('region', { name: 'GitHub 仓库关联', exact: true });
+  await info.getByRole('status').filter({ hasText: '已保存远端读取核验记录' }).waitFor();
+  assert.equal(await info.getByRole('link').getAttribute('href'), 'https://github.com/example-org/example-repo');
+  await info.getByText(/远端可能已经变化/).waitFor(); await info.screenshot({ path: 'test-results/collab/github-binding.png' });
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  await info.getByText(/稳定仓库编号 1012/).waitFor(); assert.equal(await info.getByRole('link').getAttribute('href'), 'https://github.com/example-org/imported-repo');
+  const importPanel = member.getByRole('region', { name: 'GitHub 仓库导入', exact: true });
+  const importCard = importPanel.getByRole('article', { name: '仓库导入 GitHub 真实导入仓库', exact: true });
+  await importCard.getByRole('status').filter({ hasText: '已导入' }).waitFor(); await importCard.getByText(`导入提交 ${fixture.imported.baseSha}`, { exact: false }).waitFor();
+  await importPanel.screenshot({ path: 'test-results/collab/github-import.png' });
+  await member.setViewportSize({ width: 390, height: 844 }); await importPanel.screenshot({ path: 'test-results/collab/github-import-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+  const syncPanel = member.getByRole('region', { name: 'GitHub 仓库同步', exact: true });
+  const syncCard = syncPanel.getByRole('article', { name: /仓库同步 GitHub 真实导入仓库/ }).filter({ hasText: fixture.synced.jobId });
+  await syncCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor(); await info.getByText(`当前本地基线 ${fixture.synced.remoteSha}`, { exact: false }).waitFor();
+  await syncPanel.screenshot({ path: 'test-results/collab/github-sync.png' });
+  await member.setViewportSize({ width: 390, height: 844 }); await syncPanel.screenshot({ path: 'test-results/collab/github-sync-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
+  await member.setViewportSize({ width: 390, height: 844 }); await info.screenshot({ path: 'test-results/collab/github-binding-mobile.png' }); assert.ok(await member.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await member.setViewportSize({ width: 1440, height: 1000 });
+  // Browser submission is durable before a separate restricted-role process
+  // performs I/O. No administrator connection is given to the broker core.
+  await owner.goto(base); await owner.getByRole('button').filter({ hasText: '整合候选乙' }).click();
+  await owner.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  const ownerSync = owner.getByRole('region', { name: 'GitHub 仓库同步', exact: true });
+  const submitUrl = `${base}/api/collab/repositories/${fixture.imported.id}/github-syncs`;
+  const syncBody = { expectedSha: fixture.synced.remoteSha, expectedBranch: fixture.imported.defaultBranch, acknowledge: true, reason: '由浏览器确认公共基线后请求远端安全快进。', idempotencyKey: randomUUID() };
+  assert.equal((await memberContext.request.post(submitUrl, { headers, data: syncBody })).status(), 403);
+  assert.equal((await ownerContext.request.post(submitUrl, { headers: { Origin: 'https://untrusted.invalid' }, data: syncBody })).status(), 403);
+  assert.equal((await ownerContext.request.post(submitUrl, { headers, data: { ...syncBody, expectedSha: fixture.imported.baseSha } })).status(), 409);
+  let loseSync = true;
+  await owner.route(`**/api/collab/repositories/${fixture.imported.id}/github-syncs`, async route => { if (loseSync) { loseSync = false; assert.equal((await route.fetch()).status(), 202); await route.abort('failed'); } else await route.continue(); });
+  await ownerSync.getByLabel('同步原因', { exact: true }).fill(syncBody.reason);
+  await ownerSync.getByLabel('允许将此公共基线安全快进至核验的远端提交', { exact: true }).check();
+  await ownerSync.getByRole('button', { name: '获取远端并安全快进', exact: true }).click();
+  await ownerSync.getByRole('button', { name: '重试同一同步操作', exact: true }).click();
+  const records = (await (await ownerContext.request.get(syncsUrl)).json()).syncs;
+  const queued = records.filter(item => item.repositoryId === fixture.imported.id && item.id !== fixture.synced.jobId); assert.equal(queued.length, 1); assert.equal(queued[0].dispatch.state, 'queued');
+  const brokerId = queued[0].id, brokerCard = ownerSync.getByRole('article').filter({ hasText: brokerId });
+  await brokerCard.getByRole('status').filter({ hasText: '等待同步' }).waitFor();
+  const worker = (...args) => exec(process.execPath, ['--import', 'tsx', 'scripts/e2e-github-broker.ts', ...args], { timeout: 60000 });
+  await assert.rejects(worker('crash'), error => error.signal === 'SIGKILL');
+  assert.equal(JSON.parse((await worker()).stdout.trim()).status, 'attention');
+  await brokerCard.getByRole('status').filter({ hasText: '执行已中断' }).waitFor();
+  let loseAction = true;
+  await owner.route(`**/api/collab/github-syncs/${brokerId}/actions`, async route => { if (loseAction) { loseAction = false; assert.equal((await route.fetch()).status(), 202); await route.abort('failed'); } else await route.continue(); });
+  await brokerCard.getByLabel('同步处理原因', { exact: true }).fill('执行器被终止后核查原操作，保留已经达到的远端提交。');
+  await brokerCard.getByRole('button', { name: '核查原同步', exact: true }).click();
+  await ownerSync.getByRole('button', { name: '重试同一同步操作', exact: true }).click();
+  assert.equal(JSON.parse((await worker()).stdout.trim()).outcome, 'fast_forward');
+  await brokerCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(fixture.imported.id);
+  await info.getByText(`当前本地基线 ${fixture.browserSha}`, { exact: false }).waitFor();
+  await syncPanel.getByRole('article').filter({ hasText: brokerId }).getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
+  // A separate queued request can be cancelled from the same browser UI.
+  await ownerSync.getByRole('form', { name: '发起仓库同步', exact: true }).getByText(`当前基线 ${fixture.browserSha}`, { exact: true }).waitFor();
+  await ownerSync.getByLabel('同步原因', { exact: true }).fill('取消第二次排队同步，不进行额外的远端读取。');
+  await ownerSync.getByLabel('允许将此公共基线安全快进至核验的远端提交', { exact: true }).check();
+  await Promise.all([owner.waitForResponse(r => r.url() === submitUrl && r.request().method() === 'POST' && r.status() === 202), ownerSync.getByRole('button', { name: '获取远端并安全快进', exact: true }).click()]);
+  const cancelled = (await (await ownerContext.request.get(syncsUrl)).json()).syncs.find(item => item.repositoryId === fixture.imported.id && item.status === 'pending'); assert.ok(cancelled);
+  const cancelCard = ownerSync.getByRole('article').filter({ hasText: cancelled.id });
+  await cancelCard.getByLabel('同步处理原因', { exact: true }).fill('计划已改变，终止尚未开始读取的同步请求。');
+  await Promise.all([owner.waitForResponse(r => r.url().endsWith(`/github-syncs/${cancelled.id}/actions`) && r.status() === 202), cancelCard.getByRole('button', { name: '取消同步', exact: true }).click()]);
+  assert.equal(JSON.parse((await worker()).stdout.trim()).status, 'failed');
+  await cancelCard.getByRole('status').filter({ hasText: '已取消，公共基线未更新' }).waitFor();
+  await ownerSync.screenshot({ path: 'test-results/collab/github-broker.png' });
+  await owner.setViewportSize({ width: 390, height: 844 }); await ownerSync.screenshot({ path: 'test-results/collab/github-broker-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  // New imports require org administration as well as project maintainership.
+  // The Web process admits work; a separate restricted service downloads it.
+  const importOptions = `${base}/api/collab/projects/${fixture.projectId}/github-import-options`;
+  assert.deepEqual(await (await memberContext.request.get(importOptions)).json(), { canImport: false, installations: [] });
+  const ownerImports = owner.getByRole('region', { name: 'GitHub 仓库导入', exact: true });
+  const importForm = ownerImports.getByRole('form', { name: '导入新 GitHub 仓库', exact: true });
+  const importBody = { connectionId: fixture.connectionId, githubRepositoryId: '1013', name: '浏览器导入仓库', reason: '由团队管理员将指定仓库导入本项目并保留原始历史。', idempotencyKey: randomUUID() };
+  assert.equal((await memberContext.request.post(importsUrl, { headers, data: importBody })).status(), 403);
+  assert.equal((await ownerContext.request.post(importsUrl, { headers: { Origin: 'https://untrusted.invalid' }, data: importBody })).status(), 403);
+  assert.equal(await importPanel.getByRole('form', { name: '导入新 GitHub 仓库', exact: true }).count(), 0);
+  let loseImport = true;
+  await owner.route(`**/api/collab/projects/${fixture.projectId}/github-imports`, async route => {
+    if (route.request().method() === 'POST' && loseImport) { loseImport = false; assert.equal((await route.fetch()).status(), 202); await route.abort('failed'); } else await route.continue();
+  });
+  await importForm.getByLabel('导入使用的 GitHub 安装', { exact: true }).selectOption(fixture.connectionId);
+  await importForm.getByLabel('GitHub 仓库数字编号', { exact: true }).fill(importBody.githubRepositoryId);
+  await importForm.getByLabel('项目内仓库名称', { exact: true }).fill(importBody.name);
+  await importForm.getByLabel('导入原因', { exact: true }).fill(importBody.reason);
+  await importForm.getByRole('button', { name: '导入到本项目', exact: true }).click();
+  await ownerImports.getByRole('button', { name: '重试同一导入操作', exact: true }).click();
+  const webImports = (await (await ownerContext.request.get(importsUrl)).json()).imports.filter(item => item.name === importBody.name); assert.equal(webImports.length, 1); assert.equal(webImports[0].status, 'pending');
+  const webImport = webImports[0], webImportCard = ownerImports.getByRole('article').filter({ hasText: webImport.id });
+  assert.equal((await (await memberContext.request.get(`${base}/api/collab/projects/${fixture.projectId}/repositories`)).json()).repositories.some(item => item.id === webImport.repositoryId), false);
+  await assert.rejects(worker('crash-import'), error => error.signal === 'SIGKILL');
+  assert.equal(JSON.parse((await worker('import')).stdout.trim()).status, 'attention');
+  await webImportCard.getByRole('status').filter({ hasText: '执行已中断' }).waitFor();
+  let loseImportAction = true;
+  await owner.route(`**/api/collab/github-imports/${webImport.id}/actions`, async route => { if (loseImportAction) { loseImportAction = false; assert.equal((await route.fetch()).status(), 202); await route.abort('failed'); } else await route.continue(); });
+  await webImportCard.getByLabel('导入处理原因', { exact: true }).fill('读取结束后服务中断，核查原始代码并完成仓库登记。');
+  await webImportCard.getByRole('button', { name: '核查原导入', exact: true }).click();
+  await ownerImports.getByRole('button', { name: '重试同一导入操作', exact: true }).click();
+  const recoveredImport = JSON.parse((await worker('reconcile-import')).stdout.trim()); assert.equal(recoveredImport.status, 'completed'); assert.equal(recoveredImport.baseSha, fixture.browserSha);
+  await webImportCard.getByRole('status').filter({ hasText: '已导入' }).waitFor();
+  await importPanel.getByRole('article', { name: '仓库导入 浏览器导入仓库', exact: true }).getByRole('status').filter({ hasText: '已导入' }).waitFor();
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(webImport.repositoryId);
+  await info.getByText(/稳定仓库编号 1013/).waitFor(); await info.getByText(`当前本地基线 ${fixture.browserSha}`, { exact: false }).waitFor();
+  await importForm.getByLabel('GitHub 仓库数字编号', { exact: true }).fill('1014');
+  await importForm.getByLabel('项目内仓库名称', { exact: true }).fill('已取消的浏览器导入');
+  await Promise.all([owner.waitForResponse(r => r.url() === importsUrl && r.request().method() === 'POST' && r.status() === 202), importForm.getByRole('button', { name: '导入到本项目', exact: true }).click()]);
+  const pendingImport = (await (await ownerContext.request.get(importsUrl)).json()).imports.find(item => item.name === '已取消的浏览器导入'); assert.ok(pendingImport);
+  const cancelledImportCard = ownerImports.getByRole('article').filter({ hasText: pendingImport.id });
+  await cancelledImportCard.getByLabel('导入处理原因', { exact: true }).fill('计划已变更，取消尚未读取远端的仓库导入。');
+  await Promise.all([owner.waitForResponse(r => r.url().endsWith(`/github-imports/${pendingImport.id}/actions`) && r.status() === 202), cancelledImportCard.getByRole('button', { name: '取消导入', exact: true }).click()]);
+  assert.equal(JSON.parse((await worker('cancel-import')).stdout.trim()).status, 'failed');
+  await cancelledImportCard.getByRole('status').filter({ hasText: '已取消，未发布本机仓库' }).waitFor();
+  // An orphan that never downloaded can be terminated without attempting
+  // receipt recovery or opening credentials.
+  await importForm.getByLabel('GitHub 仓库数字编号', { exact: true }).fill('1015');
+  await importForm.getByLabel('项目内仓库名称', { exact: true }).fill('终止中断的浏览器导入');
+  await Promise.all([owner.waitForResponse(r => r.url() === importsUrl && r.request().method() === 'POST' && r.status() === 202), importForm.getByRole('button', { name: '导入到本项目', exact: true }).click()]);
+  const abandoned = (await (await ownerContext.request.get(importsUrl)).json()).imports.find(item => item.name === '终止中断的浏览器导入'); assert.ok(abandoned);
+  await assert.rejects(worker('crash-import-claim'), error => error.signal === 'SIGKILL');
+  assert.equal(JSON.parse((await worker('import')).stdout.trim()).status, 'attention');
+  const abandonedCard = ownerImports.getByRole('article').filter({ hasText: abandoned.id });
+  await abandonedCard.getByRole('status').filter({ hasText: '执行已中断' }).waitFor();
+  await abandonedCard.getByLabel('导入处理原因', { exact: true }).fill('不再需要这个中断的导入，终止原请求且不下载代码。');
+  await Promise.all([owner.waitForResponse(r => r.url().endsWith(`/github-imports/${abandoned.id}/actions`) && r.status() === 202), abandonedCard.getByRole('button', { name: '终止原导入', exact: true }).click()]);
+  assert.equal(JSON.parse((await worker('cancel-import')).stdout.trim()).status, 'failed');
+  await abandonedCard.getByRole('status').filter({ hasText: '已取消，未发布本机仓库' }).waitFor();
+  await ownerImports.screenshot({ path: 'test-results/collab/github-web-import.png' });
+  await owner.setViewportSize({ width: 390, height: 844 }); await ownerImports.screenshot({ path: 'test-results/collab/github-web-import-mobile.png' }); assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); await owner.setViewportSize({ width: 1440, height: 1000 });
+  await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id);
+  const body = { expectedVersion: metadata[0].version, reason: '测试停用安装授权；应保留本机代码和任务。', idempotencyKey: randomUUID() };
+  assert.equal((await memberContext.request.post(disable, { headers, data: body })).status(), 403);
+  assert.equal((await ownerContext.request.post(disable, { headers: { Origin: 'https://untrusted.invalid' }, data: body })).status(), 403);
+  await owner.goto(`${base}/organizations/${fixture.organizationId}`);
+  const panel = owner.getByRole('region', { name: 'GitHub 安装管理', exact: true });
+  const card = panel.getByRole('article', { name: `GitHub 安装 ${fixture.connectionId}`, exact: true });
+  await card.getByLabel('GitHub 停用原因', { exact: true }).fill(body.reason);
+  await card.screenshot({ path: 'test-results/collab/github-installation.png' });
+  let lost = true; await owner.route(`**/api/collab/github-installations/${fixture.connectionId}/disable`, async route => {
+    if (lost) { lost = false; assert.equal((await route.fetch()).status(), 200); await route.abort('failed'); } else await route.continue();
+  });
+  await card.getByRole('button', { name: '停用 GitHub 安装关联', exact: true }).click();
+  await panel.getByRole('button', { name: '重试同一 GitHub 操作', exact: true }).click();
+  await card.getByRole('status').filter({ hasText: '安装关联已停用' }).waitFor(); await info.getByRole('status').filter({ hasText: '安装关联已停用' }).waitFor();
+  const afterInstallations = (await (await ownerContext.request.get(listing)).json()).installations;
+  const disabled = afterInstallations.find(item => item.id === fixture.connectionId); assert.equal(disabled.version, '2'); assert.equal(disabled.enabled, false);
+  for (const item of allMetadata.filter(item => item.id !== fixture.connectionId)) assert.deepEqual(afterInstallations.find(current => current.id === item.id), item);
+  await member.reload(); await member.getByRole('button').filter({ hasText: '整合候选乙' }).click(); await member.getByLabel('运行仓库', { exact: true }).selectOption(repository.id); await info.getByRole('status').filter({ hasText: '安装关联已停用' }).waitFor();
+  await importCard.getByRole('status').filter({ hasText: '已导入' }).waitFor();
+  await syncCard.getByRole('status').filter({ hasText: '已快进至远端提交' }).waitFor();
+  console.log('PASS: Web import and sync/cancel/reconcile with scoped MFA/CSRF and stale baseline refusal, response-loss replay, separate Git-role process, actual SIGKILL recovery for both operations and cross-browser repository/baseline visibility; exact history and shared durable records, stale-observation labeling, scoped installation access, private material absent, disable response-loss retry, cross-browser revocation and desktop/mobile layout (isolated GitHub HTTP protocol fixture; no external account).');
+}

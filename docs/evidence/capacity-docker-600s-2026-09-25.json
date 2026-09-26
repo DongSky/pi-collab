@@ -1,0 +1,70 @@
+{
+  "schema": 2,
+  "at": "2026-09-25T06:24:09.494Z",
+  "releaseCommit": "13e0a8b18aeecd728c1458ddb8cd9c88474e08f3",
+  "sourceCommit": "3e00e119568ee3f41ae10823699728c855c206f4",
+  "hardware": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.9.0",
+    "cpu": "Apple M4 Pro",
+    "logicalCpus": 12,
+    "availableParallelism": 12,
+    "memoryBytes": 51539607552
+  },
+  "backend": {
+    "runtime": "docker",
+    "images": [
+      "sha256:60a08539f05563d65adbf03ba6a0b6d81cb5398fdf02ff2c33229fe93d8ef66a"
+    ],
+    "dockerVm": {
+      "cpus": 12,
+      "memoryBytes": 8217751552,
+      "arch": "aarch64"
+    }
+  },
+  "profile": {
+    "requestedDurationMs": 600000,
+    "members": 20,
+    "organizations": 2,
+    "runs": 8,
+    "subscribersPerRun": 3,
+    "coordinationRoundsPerRun": 60,
+    "duplicateStartRequests": 100,
+    "apiRequests": 72715,
+    "loadDurationMs": 600083.596959,
+    "commonActiveIntervalMs": 600246,
+    "productionWeb": true,
+    "actualPiProcesses": true,
+    "externalInference": false,
+    "referenceCpuMemoryLimitsApplied": false,
+    "isolatedDatabaseCluster": true
+  },
+  "api": {
+    "p50": 9.65549999999348,
+    "p95": 41.434000000001106,
+    "max": 159.60241700000188
+  },
+  "events": {
+    "samples": 1441,
+    "p50": 502,
+    "p95": 952,
+    "max": 1020
+  },
+  "reconnectMs": 73.91258300002664,
+  "gates": {
+    "apiP95": true,
+    "eventP95": true,
+    "reconnect": true,
+    "duplicateOneRun": true,
+    "eightDistinctLiveProcesses": true,
+    "queuedAtCapacity": true,
+    "isolatedFiles": true,
+    "crossOrganizationStreamDenied": true
+  },
+  "notes": [
+    "Local deterministic provider exercises real Pi tools, not model quality or provider latency.",
+    "20 authenticated HTTP clients and 24 SSE readers; browser rendering not measured.",
+    "Shared host; not the specified 4-vCPU/8-GiB control and 8-vCPU/32-GiB execution reference topology."
+  ]
+}

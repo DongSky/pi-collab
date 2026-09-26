@@ -1,0 +1,92 @@
+name: Collaboration foundation acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Browser suite name from e2e/collab-suites.mjs, or all
+        required: true
+        default: all
+        type: string
+      docker:
+        description: Also build and verify the optional Docker runtime
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.catalogue.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - id: catalogue
+        run: node e2e/collab-suites.mjs --matrix >> "$GITHUB_OUTPUT"
+        env:
+          PI_COLLAB_SUITE_REQUEST: ${{ inputs.suite }}
+
+  protocols:
+    needs: suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:collab
+      - run: npm run test:release
+
+  browsers:
+    needs: suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.suites.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:collab:identity:e2e
+        env:
+          PI_COLLAB_E2E_FOCUS: ${{ matrix.suite }}
+      # Never upload server logs: they can contain local reset URLs or tokens.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collab-${{ matrix.suite }}-${{ github.sha }}
+          path: test-results/collab/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    if: ${{ inputs.docker }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run runner:docker:build
+      - run: npm run test:collab:docker

@@ -1,0 +1,43 @@
+name: Team release artifact
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: node --test tests/collab/release.test.mjs
+      # Build only in this disposable CI checkout, with no deployment secrets.
+      - run: npm run build
+      - run: node scripts/release.mjs pack --output "$RUNNER_TEMP/pi-collab-release"
+      - run: node scripts/release.mjs install --source "$RUNNER_TEMP/pi-collab-release" --output "$RUNNER_TEMP/pi-collab-installed"
+      - run: node --import tsx scripts/release-smoke.ts
+        working-directory: ${{ runner.temp }}/pi-collab-installed
+      - run: npm run runner:docker:build
+      - run: node --import tsx scripts/release-smoke.ts
+        working-directory: ${{ runner.temp }}/pi-collab-installed
+        env:
+          PI_COLLAB_RUNTIME: docker
+      - run: tar -czf "$RUNNER_TEMP/pi-collab-linux-x64.tar.gz" -C "$RUNNER_TEMP/pi-collab-release" .
+      - run: sha256sum pi-collab-linux-x64.tar.gz > pi-collab-linux-x64.tar.gz.sha256
+        working-directory: ${{ runner.temp }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-collab-linux-x64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/pi-collab-linux-x64.tar.gz
+            ${{ runner.temp }}/pi-collab-linux-x64.tar.gz.sha256
+          retention-days: 14

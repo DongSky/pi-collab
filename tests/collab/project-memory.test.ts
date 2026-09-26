@@ -1,0 +1,44 @@
+import test,{before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomBytes,randomUUID} from 'node:crypto';
+import {Pool} from 'pg';
+import {localConfig,applicationEnvironment,connectionString,executorConnectionString} from '../../scripts/local-config';
+import {startNativeDatabase} from '../../scripts/native-database';
+import {migrate} from '../../scripts/migrate';
+import {provisioningAuth} from '../../lib/collab/auth';
+import {database,asUser} from '../../lib/collab/database';
+import {createProject} from '../../lib/collab/projects';
+import {createTask} from '../../lib/collab/tasks';
+import {startRun} from '../../lib/collab/runs';
+import {ExecutionStore} from '../../lib/collab/execution-store';
+import {coordinate} from '../../lib/collab/coordination-server';
+import {projectMemory,proposeMemory,decideMemory} from '../../lib/collab/project-memory';
+const config=await localConfig(),name=`pi_collab_test_${randomBytes(6).toString('hex')}`,native=await startNativeDatabase(config);
+Object.assign(process.env,applicationEnvironment(config),{DATABASE_URL:connectionString(config,false,name)});
+const admin=new Pool({connectionString:connectionString(config,true,name)}),store=new ExecutionStore(executorConnectionString(config,name)),org=randomUUID(),repo=randomUUID(),sha='a'.repeat(40),executor=randomUUID(),users:string[]=[];
+let project:string,taskId:string,run:string,epoch:string;
+const context=()=>coordinate(store,executor,run,epoch,'get_context',{});
+const item=async(id:string)=>(await projectMemory(users[0],project)).entries.find(m=>m.id===id)!;
+const decide=async(id:string,decision:string,actor=users[0])=>{const m=await item(id);return decideMemory(actor,id,{expectedRevision:m.revision,bodyHash:m.body_hash,decision,note:'Review exact project memory and its source'});};
+before(async()=>{
+ await migrate(config,name);const auth=provisioningAuth(admin);for(let i=0;i<3;i++)users.push((await auth.api.signUpEmail({body:{name:`Memory ${i}`,email:`memory${i}@test.invalid`,password:randomBytes(20).toString('hex')}})).user.id);
+ await admin.query("INSERT INTO collab.organizations(id,name,created_by) VALUES($1,'Memory team',$2)",[org,users[0]]);for(let i=0;i<2;i++)await admin.query('INSERT INTO collab.memberships(organization_id,user_id,role) VALUES($1,$2,$3)',[org,users[i],i===0?'owner':'member']);await admin.query('UPDATE public."user" SET "twoFactorEnabled"=true WHERE id=$1',[users[0]]);
+ project=(await createProject(users[0],{organizationId:org,name:'Memory project',description:''})).id;await admin.query("INSERT INTO collab.project_memberships(organization_id,project_id,user_id,role) VALUES($1,$2,$3,'developer')",[org,project,users[1]]);
+ await admin.query("INSERT INTO collab.repositories(id,organization_id,project_id,name,provider,base_sha,default_branch) VALUES($1,$2,$3,'Memory repo','local',$4,'main')",[repo,org,project,sha]);taskId=(await createTask(users[1],project,{title:'Memory producer',description:'',acceptance:'Only human approved content'})).id;
+ await startRun(users[1],taskId,{repositoryId:repo,baseSha:sha,prompt:'Memory protocol fixture',expectedVersion:1,idempotencyKey:randomUUID()});const claim=(await store.claim(executor,'native'))!;run=claim.run.id;epoch=claim.run.epoch;await store.running(executor,run,epoch);
+});
+after(async()=>{await store.close();await database().end();globalThis.__piCollabPool=undefined;await admin.end();const cleanup=new Pool({connectionString:connectionString(config,true,'postgres')});await cleanup.query(`DROP DATABASE "${name}" WITH (FORCE)`);await cleanup.end();await native.stop();});
+test('AI proposal is source-pinned and idempotent; independent approval makes exact version visible, revoke removes it on next context',async()=>{
+ const input={key:'shared-api',title:'Use the reviewed endpoint',kind:'decision',body:'Use /v2/orders; this note cannot disable audit or change permissions.',sourceNote:'Derived from the current producer run and reviewed API contract.',parentId:null,idempotencyKey:randomUUID()};
+ const p=await coordinate(store,executor,run,epoch,'propose_memory',input),again=await coordinate(store,executor,run,epoch,'propose_memory',input);assert.equal(p.id,again.id);assert.equal((await item(p.id)).author_kind,'agent');assert.equal((await item(p.id)).source_run_id,run);assert.equal((await item(p.id)).base_sha,sha);assert.equal((await context()).projectMemory.entries.length,0);
+ await assert.rejects(decide(p.id,'approve',users[1]),/forbidden/);await decide(p.id,'approve');let c=await context();assert.equal(c.projectMemory.entries[0].id,p.id);assert.equal(c.projectMemory.entries[0].bodyHash,(await item(p.id)).body_hash);await decide(p.id,'revoke');c=await context();assert.equal(c.projectMemory.entries.length,0);assert.equal(c.projectMemory.recentWithdrawals[0].status,'revoked');
+ await assert.rejects(projectMemory(users[2],project),/not found/i);await assert.rejects(asUser(users[1],db=>db.query("UPDATE collab.project_memory SET body='changed' WHERE id=$1",[p.id])),/permission/);
+});
+test('scope, concurrent revisions and restoring old text require a new reviewed immutable version',async()=>{
+ const common={repositoryId:repo,key:'test-command',title:'Version-specific check',kind:'verification',body:'node verify.cjs',sourceNote:'Validated against this repository version only.',baseSha:'b'.repeat(40),sourceRunId:null,copiedFromId:null,parentId:null,idempotencyKey:randomUUID()};
+ const first=await proposeMemory(users[1],taskId,common);await decide(first.id,'approve');assert.equal((await context()).projectMemory.entries.length,0);
+ const second=await proposeMemory(users[1],taskId,{...common,baseSha:null,body:'node verify.cjs --safe',parentId:first.id,copiedFromId:first.id,idempotencyKey:randomUUID()}),concurrent=await proposeMemory(users[1],taskId,{...common,body:'concurrent candidate',parentId:first.id,idempotencyKey:randomUUID()});await decide(second.id,'approve');await assert.rejects(decide(concurrent.id,'approve'),/stale_memory/);assert.equal((await item(first.id)).status,'superseded');assert.equal((await context()).projectMemory.entries[0].id,second.id);
+ const restored=await proposeMemory(users[1],taskId,{...common,baseSha:null,parentId:second.id,copiedFromId:first.id,idempotencyKey:randomUUID()});assert.equal((await context()).projectMemory.entries[0].id,second.id);await decide(restored.id,'approve');assert.equal((await context()).projectMemory.entries[0].id,restored.id);assert.equal((await item(first.id)).body,'node verify.cjs');
+ const self=await proposeMemory(users[0],taskId,{...common,key:'self-review',idempotencyKey:randomUUID()});await assert.rejects(decide(self.id,'approve'),/independent_review_required/);
+ await store.finish(executor,run,epoch,'completed',{});await assert.rejects(context(),/run_not_executable|stale_lease/);
+});

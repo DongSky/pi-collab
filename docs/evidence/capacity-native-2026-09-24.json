@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "at": "2026-09-23T21:19:24.529Z",
+  "releaseCommit": "32f0974b7cb83543925e2727ada2f67de4b3d231",
+  "sourceCommit": "b1e76668dce809f8c9a417abda04603ce0adec32",
+  "hardware": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.9.0",
+    "cpu": "Apple M4 Pro",
+    "logicalCpus": 12,
+    "availableParallelism": 12,
+    "memoryBytes": 51539607552
+  },
+  "profile": {
+    "members": 20,
+    "organizations": 2,
+    "runs": 8,
+    "subscribersPerRun": 3,
+    "duplicateStartRequests": 100,
+    "apiRequests": 1000,
+    "loadDurationMs": 8283.417791,
+    "commonActiveIntervalMs": 8399,
+    "productionWeb": true,
+    "actualPiProcesses": true,
+    "externalInference": false,
+    "referenceCpuMemoryLimitsApplied": false
+  },
+  "api": {
+    "p50": 13.213874999999462,
+    "p95": 30.44666700000016,
+    "max": 42.37220799999977
+  },
+  "events": {
+    "samples": 243,
+    "p50": 555,
+    "p95": 984,
+    "max": 1003
+  },
+  "reconnectMs": 57.64837499999885,
+  "gates": {
+    "apiP95": true,
+    "eventP95": true,
+    "reconnect": true,
+    "duplicateOneRun": true,
+    "eightDistinctLiveProcesses": true,
+    "queuedAtCapacity": true,
+    "isolatedFiles": true,
+    "crossOrganizationStreamDenied": true
+  },
+  "notes": [
+    "Local deterministic provider exercises real Pi tools, not model quality or provider latency.",
+    "20 authenticated HTTP clients and 24 SSE readers; browser rendering not measured.",
+    "Shared host; not the specified 4-vCPU/8-GiB control and 8-vCPU/32-GiB execution reference topology."
+  ]
+}

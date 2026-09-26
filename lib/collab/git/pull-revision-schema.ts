@@ -1,0 +1,12 @@
+import { z } from "zod";
+import type { PullRevisionManifest } from "./pull-revision";
+import type { CodeLine } from "../integration-code-schema";
+export { pullObservationRequest as pullRevisionRequest, pullObservationCancel as pullRevisionCancel } from "./pull-observation-schema";
+export type PullRevisionRecord = { jobId: string; changeId: string; actorId: string; actorName: string; status: "queued" | "running" | "ready" | "failed" | "cancelled";
+  stopRequested: boolean; createdAt: string; finishedAt: string | null; failure: string | null; observationId: string; observationVersion: string;
+  headSha: string; baseSha: string; manifestHash: string | null; diffHash: string | null; mergeBase: string | null; current: boolean };
+export type PullRevisionContext = { taskVersion: number; observationVersion: string; canRequest: boolean; canCancel: boolean; jobs: PullRevisionRecord[] };
+export const revisionCodeQuery = z.object({ offset: z.coerce.number().int().min(0).max(10000).default(0) }).strict();
+export const revisionFileQuery = z.object({ path: z.string().min(1).max(4096), diffHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export type RevisionCodePage = { record: PullRevisionRecord; files: PullRevisionManifest["files"]; total: number; nextOffset: number | null };
+export type RevisionCodeFile = { record: PullRevisionRecord; path: string; omitted: string | null; before: string | null; after: string | null; lines: CodeLine[] };

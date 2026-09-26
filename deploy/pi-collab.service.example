@@ -1,0 +1,21 @@
+[Unit]
+Description=Pi Collab team service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi-collab
+WorkingDirectory=/srv/pi-collab/release
+# Set PATH to the Node/Git/Python installation on this host.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/node --env-file=/srv/pi-collab/team.env --import tsx scripts/dev-local.ts
+# Restart only the supervisor after it has reaped every child. No blind restart
+# on an uncertain process exit; operator uses ops:status and recovery first.
+Restart=no
+KillMode=mixed
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

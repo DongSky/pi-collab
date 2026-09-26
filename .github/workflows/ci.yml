@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run test:collab
+      - run: npm run test:release
+
+  collab-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:collab:identity:e2e
+      # Only screenshots: auth server logs can contain short-lived reset URLs.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collab-identity-browser
+          path: |
+            test-results/collab/identity-members*.png
+            test-results/collab/run-ui*.png
+            test-results/collab/run-recovery*.png
+            test-results/collab/snapshots*.png
+            test-results/collab/validations*.png
+            test-results/collab/task-results*.png
+            test-results/collab/work-intents*.png
+            test-results/collab/scope-report*.png
+            test-results/collab/contracts*.png
+            test-results/collab/coordination-notes*.png
+            test-results/collab/resources*.png
+            test-results/collab/integrations*.png
+            test-results/collab/project-members*.png
+          retention-days: 7
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PI_COLLAB_MODE: legacy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e
+        env:
+          E2E_SERVER_MODE: start
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-failure
+          path: test-results/e2e/
+          retention-days: 7

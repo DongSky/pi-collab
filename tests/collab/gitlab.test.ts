@@ -1,0 +1,100 @@
+import { inbox } from "../../lib/collab/discussions";
+import test,{before,after} from "node:test";
+import assert from "node:assert/strict";
+import {randomBytes,randomUUID} from "node:crypto";
+import {mkdtemp,rm,writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import path from "node:path";
+import {Pool} from "pg";
+import {localConfig,applicationEnvironment,connectionString,gitConnectionString,executorConnectionString} from "../../scripts/local-config";
+import {startNativeDatabase} from "../../scripts/native-database";
+import {migrate} from "../../scripts/migrate";
+import {provisioningAuth} from "../../lib/collab/auth";
+import {database} from "../../lib/collab/database";
+import {createProject} from "../../lib/collab/projects";
+import {createTask} from "../../lib/collab/tasks";
+import {startRun,runDetail} from "../../lib/collab/runs";
+import {ExecutionStore} from "../../lib/collab/execution-store";
+import {executeClaim} from "../../lib/collab/executor";
+import {runtimeBackend} from "../../lib/collab/runtime/backends";
+import {requestSnapshot,processSnapshots} from "../../lib/collab/snapshots";
+import {createValidationProfile,requestValidation} from "../../lib/collab/validations";
+import {executeValidation} from "../../lib/collab/validation-worker";
+import {publishResult} from "../../lib/collab/task-results";
+import {registerGitLab} from "../../lib/collab/gitlab/registration";
+import {processGitLab} from "../../lib/collab/gitlab/worker";
+import {gitlabProject,requestGitLab,reviewGitLab,changeGitLabConnection} from "../../lib/collab/gitlab/service";
+import {gitlabPendingOperation} from "../../lib/collab/gitlab/schema";
+import {readGitLabPlan} from "../../lib/collab/gitlab/plan";
+import {gitlabFixture} from "./fixtures/gitlab";
+const mode=process.env.PI_COLLAB_TEST_DOCKER==='1'?'docker':'native';
+const config=await localConfig(),name=`pi_collab_test_${randomBytes(6).toString('hex')}`,native=await startNativeDatabase(config),root=await mkdtemp(path.join(tmpdir(),'pi-collab-gitlab-'));
+Object.assign(process.env,applicationEnvironment(config),{DATABASE_URL:connectionString(config,false,name),PI_COLLAB_DATA_DIR:root,PI_COLLAB_RUNTIME:mode});
+const admin=new Pool({connectionString:connectionString(config,true,name)}),broker=new Pool({connectionString:gitConnectionString(config,name)}),store=new ExecutionStore(executorConnectionString(config,name)),key=randomBytes(32),org=randomUUID(),users:string[]=[],executor=randomUUID();
+let fixture:Awaited<ReturnType<typeof gitlabFixture>>,project:string,connection:string,resultId:string,repository:string;
+const work=()=>processGitLab(broker,root,async()=>Buffer.from(key));
+const request=(kind:string,extra:Record<string,unknown>={},actor=users[0])=>requestGitLab(actor,project,connection,{kind,reason:'Verify real GitLab collaboration workflow',idempotencyKey:randomUUID(),...extra});
+const operation=async(id:string)=>(await gitlabProject(users[0],project)).operations.find(o=>o.id===id)!;
+before(async()=>{
+ await migrate(config,name);fixture=await gitlabFixture(root);const auth=provisioningAuth(admin);
+ for(let i=0;i<4;i++)users.push((await auth.api.signUpEmail({body:{name:`GitLab ${i}`,email:`gitlab${i}@test.invalid`,password:randomBytes(20).toString('hex')}})).user.id);
+ await admin.query("INSERT INTO collab.organizations(id,name,created_by) VALUES($1,'GitLab team',$2)",[org,users[0]]);for(let i=0;i<3;i++)await admin.query("INSERT INTO collab.memberships(organization_id,user_id,role) VALUES($1,$2,$3)",[org,users[i],i===0?'owner':'member']);await admin.query('UPDATE public."user" SET "twoFactorEnabled"=true WHERE id=$1',[users[0]]);
+ project=(await createProject(users[0],{organizationId:org,name:'GitLab project',description:''})).id;for(let i=1;i<3;i++)await admin.query("INSERT INTO collab.project_memberships(organization_id,project_id,user_id,role) VALUES($1,$2,$3,$4)",[org,project,users[i],i===1?'developer':'reviewer']);
+ connection=(await registerGitLab(admin,key,{projectId:project,actorId:users[0],origin:fixture.origin,remoteId:'101',name:'GitLab source',reason:'Connect local protocol fixture project'},fixture.token)).id;
+});
+after(async()=>{await fixture?.close();key.fill(0);await store.close();await broker.end();await database().end();globalThis.__piCollabPool=undefined;await admin.end();const cleanup=new Pool({connectionString:connectionString(config,true,'postgres')});await cleanup.query(`DROP DATABASE "${name}" WITH (FORCE)`);await cleanup.end();await native.stop();await rm(root,{recursive:true,force:true});});
+test('restricted Git broker imports actual Git history and members cannot spend ungranted authority or read token',async()=>{
+ await assert.rejects(request('import',{},users[1]),/forbidden/);await assert.rejects(gitlabProject(users[3],project),/不可访问|not_found|forbidden|not found/);
+ const body={kind:'import',reason:'Import actual fixture Git history',idempotencyKey:randomUUID()},a=await requestGitLab(users[0],project,connection,body),b=await requestGitLab(users[0],project,connection,body);assert.equal(a.id,b.id);
+ assert.equal((await work()).status,'completed');const listing=await gitlabProject(users[1],project);repository=listing.connections[0].repository_id;assert.ok(repository);assert.equal(JSON.stringify(listing).includes(fixture.token),false);await assert.rejects(database().query('SELECT sealed FROM collab_git.gitlab_credentials'),/permission denied/);
+ const imported=await import('../../lib/collab/git/github-pack');assert.equal((await imported.importGit(path.join(root,'repositories',repository,'git'),['rev-list','--count','HEAD'],AbortSignal.timeout(5000))).trim(),'2');
+});
+test('fixed validated result prepares exact text, pushes only a new task ref, creates draft MR, records independent review and merges real Git after CI',async()=>{
+ const task=await createTask(users[1],project,{title:'GitLab result',description:'Produce fixed code',acceptance:'Contains shared result'}),base=await fixture.head();
+ const accepted=await startRun(users[1],task.id,{repositoryId:repository,baseSha:base,prompt:'Fixture source without model inference',expectedVersion:task.version,idempotencyKey:randomUUID()}),claim=(await store.claim(executor,mode))!;
+ assert.equal(await executeClaim(store,executor,claim,{dataRoot:root,backend:runtimeBackend(mode),driver:async(agent,_claim,ws)=>{
+  await writeFile(path.join(ws.checkout,'code.txt'),'GitLab changed\n');
+  await writeFile(path.join(ws.checkout,'check.cjs'),"require('node:assert/strict').equal(require('node:fs').readFileSync('code.txt','utf8'),'GitLab changed\\n');\n");
+  await agent.peer.command('bash',{command:'node check.cjs'});return{modelInference:false};
+ }}),'completed');
+ const run=(await runDetail(users[1],accepted.runId)).run,snapshot=await requestSnapshot(users[1],run.id,{expectedRevision:run.revision,note:'Validated GitLab result',idempotencyKey:randomUUID()});await processSnapshots(store,root);
+ const profile=await createValidationProfile(users[0],project,{repositoryId:repository,name:'GitLab fixture code',idempotencyKey:randomUUID(),config:{version:1,steps:[{tool:'node',args:['check.cjs'],timeoutSeconds:10}]}}),validation=await requestValidation(users[1],snapshot.snapshotId,{profileId:profile.profileId,idempotencyKey:randomUUID()});const check=(await store.claimValidation(executor))!;assert.equal(await executeValidation(store,check,root),'passed');
+ const current=(await admin.query('SELECT version FROM collab.tasks WHERE id=$1',[task.id])).rows[0].version;resultId=(await publishResult(users[1],task.id,{validationId:validation.validationId,expectedVersion:current,idempotencyKey:randomUUID(),note:'Publish checked code'})).resultId;
+ const prepare=await request('prepare',{resultId},users[1]);assert.equal((await work()).status,'completed');const p=await operation(prepare.id),plan=await readGitLabPlan(root,p.id,p.result.planHash);assert.ok(plan.changes.some(c=>c.path==='code.txt'&&c.after==='GitLab changed\n'));
+ // Losing an actual receive-pack reply preserves the unknown result and never creates/retries an MR.
+ const unknownPrepare=await request('prepare',{resultId},users[1]);assert.equal((await work()).status,'completed');const up=await operation(unknownPrepare.id);
+ fixture.git.state.loseReply=true;const unknownSend=await request('publish',{sourceId:up.id,planHash:up.result.planHash,acknowledge:true},users[1]);assert.equal((await work()).status,'uncertain');fixture.git.state.loseReply=false;
+ assert.equal((await operation(unknownSend.id)).stage,'push_sent');assert.equal(await work(),null);await assert.rejects(request('publish',{sourceId:up.id,planHash:up.result.planHash,acknowledge:true},users[1]),/gitlab_operation_exists/);
+ await assert.rejects(reviewGitLab(users[1],p.id,{planHash:p.result.planHash,decision:'approve',note:'Self approval is not allowed'}),/independent_review_required/);
+ const persisted=JSON.stringify({connectionId:connection,command:{kind:'publish',sourceId:p.id,planHash:p.result.planHash,acknowledge:true,reason:'Explicit fixed version publication survives a lost browser response',idempotencyKey:randomUUID()}});
+ const original=gitlabPendingOperation.parse(JSON.parse(persisted));
+ await assert.rejects(requestGitLab(users[2],project,original.connectionId,original.command),/forbidden/);
+ const publish=await requestGitLab(users[1],project,original.connectionId,original.command);assert.equal((await work()).status,'completed');const sent=await operation(publish.id);assert.equal(await fixture.head(plan.branch),plan.commitSha);assert.equal(await fixture.head(),base);assert.equal(sent.result.mr.draft,true);
+ // A page reload after losing the response reuses the persisted intent, even after delivery completed.
+ const restored=gitlabPendingOperation.parse(JSON.parse(persisted)),creates=fixture.calls.filter(c=>c.method==='POST'&&c.route.endsWith('/merge_requests')).length;
+ assert.equal((await requestGitLab(users[1],project,restored.connectionId,restored.command)).id,publish.id);
+ assert.equal(await work(),null);assert.equal(fixture.calls.filter(c=>c.method==='POST'&&c.route.endsWith('/merge_requests')).length,creates);
+ await assert.rejects(requestGitLab(users[1],project,restored.connectionId,{...restored.command,reason:'A new intent cannot reuse the stored request identity'}),/idempotency_conflict/);
+ await assert.rejects(requestGitLab(users[2],project,restored.connectionId,restored.command),/gitlab_operation_exists/);
+ await request('merge',{sourceId:sent.id,expectedSha:plan.commitSha});assert.equal((await work()).status,'failed');
+ await reviewGitLab(users[2],p.id,{planHash:p.result.planHash,decision:'approve',note:'Independently reviewed exact code and changes'});
+ await request('ready',{sourceId:sent.id,expectedSha:plan.commitSha});assert.equal((await work()).status,'completed');fixture.state.pipeline='failed';
+ await request('observe',{sourceId:sent.id});assert.equal((await work()).status,'completed');
+ await request('observe',{sourceId:sent.id});assert.equal((await work()).status,'completed');
+ assert.equal((await inbox(users[1])).items.filter(n=>n.task_id===task.id&&n.kind==='gitlab.ci_failed').length,1);
+ assert.ok((await inbox(users[2])).items.some(n=>n.task_id===task.id&&n.kind==='gitlab.ready'));
+ await request('merge',{sourceId:sent.id,expectedSha:plan.commitSha});assert.equal((await work()).status,'failed');fixture.state.pipeline='success';
+ await request('merge',{sourceId:sent.id,expectedSha:plan.commitSha});assert.equal((await work()).status,'completed');assert.notEqual(await fixture.head(),base);assert.equal(await fixture.command(['show','main:code.txt']),'GitLab changed');
+ assert.ok((await inbox(users[1])).items.some(n=>n.task_id===task.id&&n.kind==='gitlab.merged'));
+ await request('sync');assert.equal((await work()).status,'completed');assert.equal((await admin.query('SELECT base_sha FROM collab.repositories WHERE id=$1',[repository])).rows[0].base_sha,await fixture.head());
+ const git=await import('../../lib/collab/git/github-pack');assert.equal((await git.importGit(path.join(root,'repositories',repository,'git'),['rev-parse','HEAD'],AbortSignal.timeout(5000))).trim(),await fixture.head());
+ // A fresh task can now use the synchronized base; no old task working tree is rewritten.
+ const next=await createTask(users[1],project,{title:'After GitLab merge',description:'',acceptance:'New baseline'});assert.ok((await startRun(users[1],next.id,{repositoryId:repository,baseSha:await fixture.head(),prompt:'Use synchronized base',expectedVersion:next.version,idempotencyKey:randomUUID()})).runId);
+
+});
+test('disabled or version-changed connection rejects queued work and does not alter project roles',async()=>{
+ const original=(await gitlabProject(users[0],project)).connections[0],rotating=await request('sync');
+ await registerGitLab(admin,key,{projectId:project,actorId:users[0],origin:fixture.origin,remoteId:'101',name:'GitLab source',reason:'Replace provisioned project token explicitly'},fixture.token,undefined,{connectionId:connection,expectedVersion:original.version});
+ assert.equal(await work(),null);assert.equal((await operation(rotating.id)).failure,'gitlab_authority_changed');
+ const c=(await gitlabProject(users[0],project)).connections[0];assert.equal(Number(c.version),Number(original.version)+1);const pending=await request('prepare',{resultId},users[1]);await changeGitLabConnection(users[0],connection,{expectedVersion:c.version,enabled:false,reason:'Disable project access for verification'});assert.equal(await work(),null);assert.equal((await operation(pending.id)).status,'failed');await assert.rejects(request('prepare',{resultId},users[1]),/gitlab_connection_unavailable/);assert.equal((await gitlabProject(users[1],project)).role,'developer');
+});
