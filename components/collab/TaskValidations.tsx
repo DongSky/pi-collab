@@ -15,6 +15,7 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
 }) {
   const [profiles, setProfiles] = useState<Profile[]>([]), [validations, setValidations] = useState<Validation[]>([]);
   const [snapshotId, setSnapshotId] = useState(""), [selectedProfileId, setProfileId] = useState("");
+  const [quickCommand, setQuickCommand] = useState("npm test");
   const profileId = requiredProfileId ?? selectedProfileId;
   const [name, setName] = useState(""), [repositoryId, setRepositoryId] = useState("");
   const [steps, setSteps] = useState([{ tool: "node", args: "--test", timeoutSeconds: 60 }]);
@@ -52,11 +53,20 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
     <p className="collab-muted collab-small">在新的独立工作区执行指定检查；容器来源使用单独容器，本机来源使用本机进程。通过只适用于该快照和这份配置；仍需评审与组合验证。安装依赖需列为独立步骤，原工作区和个人环境不会复制。</p>
     {error && <p className="collab-error" role="alert">{error}</p>}
     {retry && <button className="collab-button" disabled={busy} onClick={() => pending.current && void submit(pending.current.path, pending.current.body)}>重试同一验证操作</button>}
-    {canRun && <form className="collab-form compact" onSubmit={event => { event.preventDefault(); void submit(`snapshots/${snapshotId}/validations`, { profileId, idempotencyKey: crypto.randomUUID() }); }}>
+    {canRun && <form className="collab-form compact" onSubmit={event => {
+      event.preventDefault();
+      const body = quickCommand.trim()
+        ? { command: quickCommand.trim(), idempotencyKey: crypto.randomUUID() }
+        : { profileId, idempotencyKey: crypto.randomUUID() };
+      void submit(`snapshots/${snapshotId}/validations`, body);
+    }}>
       <label>待验证快照<select aria-label="待验证快照" required value={snapshotId} disabled={busy || retry} onChange={event => { setSnapshotId(event.target.value); setProfileId(""); }}><option value="">选择快照</option>{snapshots.filter(s => s.status === "ready").map(s => <option value={s.id} key={s.id}>{s.note.slice(0, 60)} · {s.id.slice(0, 8)}</option>)}</select></label>
-      <label>{requiredProfileId ? "修复必跑配置" : "验证配置"}<select aria-label="验证配置" required value={profileId} disabled={busy || retry || !!requiredProfileId} onChange={event => setProfileId(event.target.value)}><option value="">选择此仓库的配置</option>{choices.map(p => <option key={p.id} value={p.id}>{p.name} · {p.id.slice(0, 8)}</option>)}</select></label>
-      {choices.find(p => p.id === profileId)?.config.steps.map((step, index) => <p className="collab-small collab-prewrap" key={index}>{index + 1}. {step.tool} {step.args.map(arg => JSON.stringify(arg)).join(" ")} · 超时 {step.timeoutSeconds} 秒</p>)}
-      <button className="collab-button" disabled={busy || retry || !profileId || !snapshotId}>执行快照验证</button>
+      <label>快速验证命令<input aria-label="快速验证命令" placeholder="例如：npm test" maxLength={500} value={quickCommand} disabled={busy || retry} onChange={e => setQuickCommand(e.target.value)} /><small className="collab-muted">直接输入命令即可运行，无需先创建配置。只支持 node 或 npm 开头。</small></label>
+      <details><summary>或选择已保存的验证配置</summary>
+        <label>{requiredProfileId ? "修复必跑配置" : "验证配置"}<select aria-label="验证配置" value={profileId} disabled={busy || retry || !!requiredProfileId || !!quickCommand.trim()} onChange={event => setProfileId(event.target.value)}><option value="">选择此仓库的配置</option>{choices.map(p => <option key={p.id} value={p.id}>{p.name} · {p.id.slice(0, 8)}</option>)}</select></label>
+        {choices.find(p => p.id === profileId)?.config.steps.map((step, index) => <p className="collab-small collab-prewrap" key={index}>{index + 1}. {step.tool} {step.args.map(arg => JSON.stringify(arg)).join(" ")} · 超时 {step.timeoutSeconds} 秒</p>)}
+      </details>
+      <button className="collab-button" disabled={busy || retry || !snapshotId || (!quickCommand.trim() && !profileId)}>执行快照验证</button>
     </form>}
     {role === "maintainer" && <details><summary>创建验证配置版本</summary><form className="collab-form compact" onSubmit={createProfile}>
       <p className="collab-muted collab-small">配置保存后不修改，调整命令时创建新版本。本机命令适用于可信项目成员。</p>

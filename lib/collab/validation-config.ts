@@ -13,3 +13,27 @@ export const validationConfig = z.object({
 export type ValidationConfig = z.infer<typeof validationConfig>;
 export const validationProfileInput = z.object({ repositoryId: z.uuid(), name: z.string().trim().min(1).max(120), config: validationConfig, idempotencyKey: z.uuid() }).strict();
 export const validationInput = z.object({ profileId: z.uuid(), idempotencyKey: z.uuid() }).strict();
+// Quick validation: run a single command directly without creating a profile first.
+// The command is parsed into a single validation step (e.g. "npm test" -> {tool:"npm",args:["test"]}).
+export const quickValidationInput = z.object({ command: z.string().trim().min(1).max(500), idempotencyKey: z.uuid() }).strict();
+
+/** Parse a quick command like "npm test" or "node --test" into a validation step. */
+export function parseQuickCommand(command: string): { tool: "node" | "npm"; args: string[]; timeoutSeconds: number } {
+  const trimmed = command.trim();
+  const parts = trimmed.split(/\s+/);
+  const tool = parts[0];
+  if (tool !== "node" && tool !== "npm") {
+    throw new Error(`快速验证只支持 node 或 npm 开头，例如 "npm test" 或 "node --test"。`);
+  }
+  const args = parts.slice(1);
+  if (!args.length) {
+    throw new Error(`请提供完整的命令，例如 "npm test"。`);
+  }
+  // Basic safety: reject shell metacharacters since args are passed directly (not via shell).
+  for (const arg of args) {
+    if (/[;&|`$(){}[\]<>!]/.test(arg)) {
+      throw new Error(`参数 "${arg}" 包含不支持的字符。请只使用简单的命令和参数。`);
+    }
+  }
+  return { tool, args, timeoutSeconds: 300 };
+}

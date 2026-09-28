@@ -1,7 +1,7 @@
 import { asUser } from "./database";
 import { projectRole, uuid } from "./projects";
 import { DomainError } from "./policy";
-import { validationInput, validationProfileInput } from "./validation-config";
+import { validationInput, validationProfileInput, quickValidationInput, parseQuickCommand } from "./validation-config";
 import type { z } from "zod";
 
 export function createValidationProfile(userId: string, projectId: string, raw: z.infer<typeof validationProfileInput>) {
@@ -18,6 +18,28 @@ export function listValidationProfiles(userId: string, projectId: string) {
 export function requestValidation(userId: string, snapshotId: string, raw: z.infer<typeof validationInput>) {
   uuid.parse(snapshotId); const input = validationInput.parse(raw);
   return asUser(userId, async db => (await db.query("SELECT collab.request_validation($1,$2,$3) AS result", [snapshotId, input.profileId, input.idempotencyKey])).rows[0].result);
+}
+/** Quick validation: parse a command like "npm test", create an ephemeral profile, and request validation.
+ *  This lets users run a check without first creating a named profile (Cursor-style: just run the command). */
+export function requestQuickValidation(userId: string, snapshotId: string, raw: z.infer<typeof quickValidationInput>) {
+  uuid.parse(snapshotId); const input = quickValidationInput.parse(raw);
+  let step: { tool: "node" | "npm"; args: string[]; timeoutSeconds: number };
+  try {
+    step = parseQuickCommand(input.command);
+  } catch (e) {
+    throw new DomainError("invalid_command", e instanceof Error ? e.message : "命令格式不正确。", 400);
+  }
+  return asUser(userId, async db => {
+    // Get the snapshot's project and repository to create the ephemeral profile
+    const snap = (await db.query("SELECT s.project_id, s.workspace_id, w.repository_id FROM collab.snapshots s JOIN collab.workspaces w ON w.id=s.workspace_id WHERE s.id=$1", [snapshotId])).rows[0];
+    if (!snap) throw new DomainError("not_found", "快照不存在或不可访问。", 404);
+    const profileName = `快速验证: ${input.command.slice(0, 80)}`;
+    const config = JSON.stringify({ version: 1, steps: [step] });
+    const profile = (await db.query("SELECT collab.create_validation_profile($1,$2,$3,$4,$5) AS result",
+      [snap.project_id, snap.repository_id, profileName, config, input.idempotencyKey])).rows[0].result;
+    const profileId = profile.profileId ?? profile.id;
+    return (await db.query("SELECT collab.request_validation($1,$2,$3) AS result", [snapshotId, profileId, input.idempotencyKey])).rows[0].result;
+  });
 }
 export function listValidations(userId: string, taskId: string) {
   uuid.parse(taskId);
