@@ -53,7 +53,13 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
     <p className="collab-muted collab-small">在新的独立工作区执行指定检查；容器来源使用单独容器，本机来源使用本机进程。通过只适用于该快照和这份配置；仍需评审与组合验证。安装依赖需列为独立步骤，原工作区和个人环境不会复制。</p>
     {error && <p className="collab-error" role="alert">{error}</p>}
     {retry && <button className="collab-button" disabled={busy} onClick={() => pending.current && void submit(pending.current.path, pending.current.body)}>重试同一验证操作</button>}
-    {canRun && <form className="collab-form compact" onSubmit={event => {
+    {canRun && <div className="collab-form compact">
+      <button className="collab-button primary" disabled={busy || retry} onClick={() => void submit(`tasks/${taskId}/auto-validate`, { idempotencyKey: crypto.randomUUID() })} title="自动检测项目类型、创建快照并运行测试">
+        🤖 自动验证（AI 代劳）
+      </button>
+      <p className="collab-muted collab-small">自动检测项目类型（npm test / pytest / go test 等）、创建快照并运行。手动测试请用终端。</p>
+    </div>}
+    {canRun && <details><summary>手动验证（高级）</summary><form className="collab-form compact" onSubmit={event => {
       event.preventDefault();
       const body = quickCommand.trim()
         ? { command: quickCommand.trim(), idempotencyKey: crypto.randomUUID() }
@@ -67,7 +73,7 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
         {choices.find(p => p.id === profileId)?.config.steps.map((step, index) => <p className="collab-small collab-prewrap" key={index}>{index + 1}. {step.tool} {step.args.map(arg => JSON.stringify(arg)).join(" ")} · 超时 {step.timeoutSeconds} 秒</p>)}
       </details>
       <button className="collab-button" disabled={busy || retry || !snapshotId || (!quickCommand.trim() && !profileId)}>执行快照验证</button>
-    </form>}
+    </form></details>}
     {role === "maintainer" && <details><summary>创建验证配置版本</summary><form className="collab-form compact" onSubmit={createProfile}>
       <p className="collab-muted collab-small">配置保存后不修改，调整命令时创建新版本。本机命令适用于可信项目成员。</p>
       <label>配置名称<input aria-label="验证配置名称" required maxLength={120} value={name} disabled={busy || retry} onChange={e => setName(e.target.value)} /></label>
