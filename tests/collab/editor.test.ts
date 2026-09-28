@@ -350,3 +350,17 @@ test("multi-file edits preview, apply atomically, undo with a version fence, and
  await checkpoint(f.s.id,"handoff");
  await assert.rejects(applyEditorChanges(users[1], f.s.id, { version:current.version,changes:current.changes }), /editor_frozen/);
 });
+
+test("resolveWriteback overwrite writes the shared draft to the bound directory (regression: session alias)", async () => {
+ const { resolveWriteback } = await import("../../lib/collab/local-binding");
+ const f = await draft();
+ const bindRoot = await mkdtemp(path.join(tmpdir(), "pi-bind-"));
+ // Direct binding insert: setLocalBinding is MFA-gated, but resolveWriteback only needs the row.
+ await admin.query("INSERT INTO collab.project_local_bindings(project_id,local_path,created_by) VALUES($1,$2,$3)", [project, bindRoot, users[0]]);
+ const result = await resolveWriteback(users[1], f.s.id, f.doc.id, { decision: "overwrite" }) as { status: string; scope: string; path: string };
+ assert.equal(result.status, "written");
+ assert.equal(result.scope, "binding");
+ assert.equal(result.path, "code.txt");
+ assert.equal(await readFile(path.join(bindRoot, "code.txt"), "utf8"), "one\ntwo\nthree\n");
+ await rm(bindRoot, { recursive: true, force: true });
+});

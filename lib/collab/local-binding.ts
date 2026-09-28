@@ -95,7 +95,7 @@ export function resolveWriteback(userId: string, sessionId: string, documentId: 
  z.uuid().parse(sessionId); z.uuid().parse(documentId);
  const input = resolveInput.parse(raw);
  return asUser(userId, async db => {
-  const s = (await db.query("SELECT s.project_id AS \"projectId\" FROM collab.editor_sessions WHERE id=$1", [sessionId])).rows[0] as { projectId: string } | undefined;
+  const s = (await db.query("SELECT s.project_id AS \"projectId\" FROM collab.editor_sessions s WHERE s.id=$1", [sessionId])).rows[0] as { projectId: string } | undefined;
   if (!s) throw new DomainError("not_found", "共编草稿不存在或不可访问。", 404);
   await projectRole(db, s.projectId, "task.create");
   const d = (await db.query("SELECT id, path, content, original_text, deleted, local_path AS \"localPath\" FROM collab.editor_documents WHERE id=$1 AND session_id=$2", [documentId, sessionId])).rows[0] as { id: string; path: string; content: string; original_text: string | null; deleted: boolean; localPath: string | null } | undefined;

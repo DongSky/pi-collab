@@ -1,6 +1,6 @@
-import { existsSync } from "fs";
-import { dirname, join } from "path";
-import { execPath } from "process";
+import { existsSync, realpathSync } from "fs";
+import { dirname, join, delimiter } from "path";
+import { execPath, env } from "process";
 
 export type NodeCliName = "npm" | "npx";
 
@@ -9,6 +9,10 @@ export interface NodeCliLookupOptions {
   nodeDir?: string;
   /** Probe used to test a candidate path, injectable for tests. */
   fileExists?: (path: string) => boolean;
+  /** PATH override for tests. Defaults to `process.env.PATH`. */
+  pathEnv?: string;
+  /** Symlink resolver for the PATH fallback, injectable for tests. */
+  realpath?: (path: string) => string;
 }
 
 /**
@@ -40,6 +44,28 @@ export function findNodeCliScript(
     } catch {
       // ignore
     }
+  }
+  // Fallback: resolve the binary from PATH (e.g. non-standard installs where
+  // node and npm live in different prefixes). If it is a symlink to the real
+  // `<name>-cli.js`, use the resolved script so we can still spawn it through
+  // the current node binary without a shell.
+  try {
+    const pathEnv = options.pathEnv ?? env.PATH ?? "";
+    const realpath = options.realpath ?? realpathSync;
+    for (const dir of pathEnv.split(delimiter)) {
+      if (!dir) continue;
+      const bin = join(dir, name);
+      let real: string;
+      try {
+        if (!fileExists(bin)) continue;
+        real = realpath(bin);
+      } catch {
+        continue;
+      }
+      if (real.endsWith(`${name}-cli.js`) && fileExists(real)) return real;
+    }
+  } catch {
+    // ignore
   }
   return null;
 }
