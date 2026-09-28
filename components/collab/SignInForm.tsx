@@ -43,7 +43,7 @@ export function SignInForm() {
       <div className="collab-login-footer">Derived from pi-web · pi-collab</div>
     </section>
     <section className="collab-login-form-section">
-      <form onSubmit={submit} className="collab-form">
+      <form onSubmit={submit} method="post" action="/sign-in" className="collab-form">
         <h2>{secondFactor ? "验证身份" : "登录工作空间"}</h2>
         <p className="collab-muted">{secondFactor ? recovery ? "输入一个尚未使用的恢复码。" : "输入验证器中的 6 位动态验证码。" : "使用团队邀请的账户继续。"}</p>
         {secondFactor ? <label>{recovery ? "恢复码" : "验证码"}<input key={recovery ? "recovery" : "totp"} name="code" inputMode={recovery ? "text" : "numeric"} autoComplete="one-time-code" pattern={recovery ? undefined : "[0-9]{6}"} required autoFocus /></label> : <>
