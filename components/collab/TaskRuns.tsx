@@ -214,6 +214,33 @@ export function TaskRuns({ visible, task, tasks, projectId, userId, role, runtim
       setError(e instanceof Error ? e.message : "提交失败");
     } finally { setBusy(false); }
   }
+
+  /** One-click terminal: create a terminal run with sensible defaults, no form needed. */
+  async function quickTerminal() {
+    if (busy || !authorized || !draftReady) return;
+    // If there's already a terminal run, just select it
+    const existing = runs.find(r => r.execution_kind === "terminal" && !terminal.has(r.status));
+    if (existing) { setSelected(existing.id); return; }
+    const repo = repositories[0];
+    if (!repo) { setError("还没有可用的代码仓库，请先导入工作目录。"); return; }
+    setBusy(true); setError("");
+    try {
+      const body = {
+        repositoryId: repo.id,
+        baseSha: repo.base_sha,
+        prompt: "手动终端会话：运行命令、测试或调试。",
+        expectedVersion: task.version,
+        idempotencyKey: crypto.randomUUID(),
+        executionKind: "terminal" as const,
+      };
+      const result = await collabApi<{ runId: string }>(`tasks/${task.id}/runs`, body);
+      if (!alive.current) return;
+      await refresh(); setSelected(result.runId); await onChange();
+    } catch (e) {
+      if (!alive.current) return;
+      setError(e instanceof Error ? e.message : "打开终端失败");
+    } finally { setBusy(false); }
+  }
   async function stop() {
     if (!current || busy) return; setBusy(true); setError("");
     const key = `${current.id}:${current.control.version}`;
@@ -334,6 +361,13 @@ export function TaskRuns({ visible, task, tasks, projectId, userId, role, runtim
       </div></form> : <p className="collab-muted">可以查看运行记录。任务负责人和项目维护者可以发起运行。</p>}
       </section></div>
     </aside></AgentDock></div>
-    {current?.execution_kind==="terminal"&&<details className="wb-bottom-panel" key={current.id} open={!terminal.has(current.status)}><summary><WorkbenchIcon name="terminal"/>终端 · {current.control?.controllerName??"成员"} · {current.status === "running" ? "终端运行中" : names[current.status]}<span>收起面板不会停止运行</span></summary><div className="wb-terminal-content"><SharedTerminal key={`terminal:${current.id}`} runId={current.id} userId={userId} status={current.status} control={current.control} batches={batches} truncated={truncated}/></div></details>}
+    {current?.execution_kind==="terminal"
+      ? <details className="wb-bottom-panel" key={current.id} open={!terminal.has(current.status)}><summary><WorkbenchIcon name="terminal"/>终端 · {current.control?.controllerName??"成员"} · {current.status === "running" ? "终端运行中" : names[current.status]}<span>收起面板不会停止运行</span></summary><div className="wb-terminal-content"><SharedTerminal key={`terminal:${current.id}`} runId={current.id} userId={userId} status={current.status} control={current.control} batches={batches} truncated={truncated}/></div></details>
+      : <div className="wb-bottom-panel wb-terminal-prompt">
+          <button className="collab-button" disabled={busy || !authorized} onClick={() => void quickTerminal()}>
+            <WorkbenchIcon name="terminal"/> 打开终端
+          </button>
+          <span className="collab-muted collab-small">在项目目录运行命令、测试或调试</span>
+        </div>}
   </section>;
 }
