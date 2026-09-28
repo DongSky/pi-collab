@@ -15,7 +15,7 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
 }) {
   const [profiles, setProfiles] = useState<Profile[]>([]), [validations, setValidations] = useState<Validation[]>([]);
   const [snapshotId, setSnapshotId] = useState(""), [selectedProfileId, setProfileId] = useState("");
-  const [quickCommand, setQuickCommand] = useState("npm test");
+  const [quickCommand, setQuickCommand] = useState("");
   const profileId = requiredProfileId ?? selectedProfileId;
   const [name, setName] = useState(""), [repositoryId, setRepositoryId] = useState("");
   const [steps, setSteps] = useState([{ tool: "node", args: "--test", timeoutSeconds: 60 }]);
@@ -69,7 +69,7 @@ export function TaskValidations({ projectId, taskId, userId, role, canRun, snaps
       <label>待验证快照<select aria-label="待验证快照" required value={snapshotId} disabled={busy || retry} onChange={event => { setSnapshotId(event.target.value); setProfileId(""); }}><option value="">选择快照</option>{snapshots.filter(s => s.status === "ready").map(s => <option value={s.id} key={s.id}>{s.note.slice(0, 60)} · {s.id.slice(0, 8)}</option>)}</select></label>
       <label>快速验证命令<input aria-label="快速验证命令" placeholder="例如：npm test、pytest、go test、cargo test" maxLength={500} value={quickCommand} disabled={busy || retry} onChange={e => setQuickCommand(e.target.value)} /><small className="collab-muted">直接输入命令即可运行，无需先创建配置。支持 node/npm、python/pytest、go、cargo、mvn、ruby 等。</small></label>
       <details><summary>或选择已保存的验证配置</summary>
-        <label>{requiredProfileId ? "修复必跑配置" : "验证配置"}<select aria-label="验证配置" value={profileId} disabled={busy || retry || !!requiredProfileId || !!quickCommand.trim()} onChange={event => setProfileId(event.target.value)}><option value="">选择此仓库的配置</option>{choices.map(p => <option key={p.id} value={p.id}>{p.name} · {p.id.slice(0, 8)}</option>)}</select></label>
+        <label>{requiredProfileId ? "修复必跑配置" : "验证配置"}<select aria-label="验证配置" value={profileId} disabled={busy || retry || !!requiredProfileId || !!quickCommand.trim()} onChange={event => { setProfileId(event.target.value); if (event.target.value) setQuickCommand(""); }}><option value="">选择此仓库的配置</option>{choices.map(p => <option key={p.id} value={p.id}>{p.name} · {p.id.slice(0, 8)}</option>)}</select></label>
         {choices.find(p => p.id === profileId)?.config.steps.map((step, index) => <p className="collab-small collab-prewrap" key={index}>{index + 1}. {step.tool} {step.args.map(arg => JSON.stringify(arg)).join(" ")} · 超时 {step.timeoutSeconds} 秒</p>)}
       </details>
       <button className="collab-button" disabled={busy || retry || !snapshotId || (!quickCommand.trim() && !profileId)}>执行快照验证</button>
