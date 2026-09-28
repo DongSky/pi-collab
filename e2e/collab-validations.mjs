@@ -17,6 +17,7 @@ export async function verifyValidationUi({base,projectId,taskId,snapshot,manifes
  const profiles=await ownerContext.request.get(`${base}/api/collab/projects/${projectId}/validation-profiles`);assert.equal(profiles.status(),200);
  const profile=(await profiles.json()).profiles.find(p=>p.name==='固定工作版本检查');assert.ok(profile);
  await panel.getByText('创建验证配置版本',{exact:true}).click();
+ await panel.getByText('手动验证（高级）',{exact:true}).click();
  await panel.getByLabel('待验证快照').selectOption(snapshot.id);
  await panel.getByLabel('验证配置',{exact:true}).selectOption(profile.id);
  const invalidCreate=await memberContext.request.post(`${base}/api/collab/projects/${projectId}/validation-profiles`,{headers,data:{repositoryId:repository.id,name:'Forbidden',config:profile.config,idempotencyKey:randomUUID()}});assert.equal(invalidCreate.status(),403);
