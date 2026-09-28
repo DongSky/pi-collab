@@ -123,7 +123,8 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
     const fields = new FormData(event.currentTarget);
     try {
       if (form === "project") {
-        const project = await api<Project>("projects", { name: fields.get("name"), description: fields.get("description"), organizationId: fields.get("organizationId") });
+        const workingDirectory = String(fields.get("workingDirectory") ?? "").trim();
+        const project = await api<Project>("projects", { name: fields.get("name"), description: fields.get("description"), organizationId: fields.get("organizationId"), ...(workingDirectory ? { workingDirectory } : {}) });
         await loadCatalogue(); setSelected(project.id);
       } else {
         const created = await api<Task>(`projects/${selected}/tasks`, { title: fields.get("title"), description: fields.get("description"), acceptance: fields.get("acceptance") });
@@ -174,6 +175,7 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
             {form === "project" ? <>
               <label>所属团队<select name="organizationId">{catalogue.organizations.filter(o => ["owner", "admin"].includes(o.role)).map(o => <option value={o.id} key={o.id}>{o.name}</option>)}</select></label>
               <label>项目名称<input name="name" maxLength={120} required autoFocus /></label>
+              <label>工作目录（可选）<input name="workingDirectory" maxLength={4096} placeholder="例如：/home/user/my-project，留空则为普通项目" /><small className="collab-muted">像 Cursor 一样导入本地目录：项目将绑定该目录，可直接改代码或 vibe coding。</small></label>
             </> : <label>任务名称<input name="title" maxLength={200} required autoFocus placeholder="例如：为订单接口添加分页" /></label>}
             <label>{form === "project" ? "项目说明" : "目标与修改范围"}<textarea name="description" rows={4} maxLength={5000} /></label>
             {form === "task" && <label>验收标准<textarea name="acceptance" rows={3} maxLength={20000} placeholder="完成后，如何证明这个任务达到了预期？" /></label>}
