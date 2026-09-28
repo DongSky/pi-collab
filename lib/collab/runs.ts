@@ -1,5 +1,10 @@
 import path from "node:path";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { mkdir, cp } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type { PoolClient } from "pg";
 import { asUser } from "./database";
 import { projectRole, uuid } from "./projects";
 import { DomainError } from "./policy";
@@ -9,9 +14,93 @@ export { runInput } from "./run-schema";
 export const stopInput = z.object({ idempotencyKey: uuid, controlVersion: z.string().regex(/^[1-9][0-9]{0,17}$/).optional() }).strict();
 export interface AcceptedCommand { commandId: string; runId: string; status: string; replayed: boolean }
 
+const exec = promisify(execFile);
+
+/**
+ * Simplification: import a local working directory as a repository on-the-fly.
+ * Codex/Cursor-style: user provides a directory path, we handle the repository
+ * bookkeeping automatically instead of requiring a pre-imported repositoryId.
+ */
+async function ensureLocalRepository(
+  db: PoolClient,
+  userId: string,
+  projectId: string,
+  workingDirectory: string,
+  baseSha?: string,
+): Promise<{ repositoryId: string; baseSha: string }> {
+  const absPath = path.resolve(workingDirectory);
+  // Verify it's a directory with a git repo (or at least exists)
+  let resolvedSha = baseSha;
+  if (!resolvedSha) {
+    try {
+      const { stdout } = await exec("git", ["-C", absPath, "rev-parse", "HEAD"], { timeout: 10000 });
+      resolvedSha = stdout.trim();
+    } catch {
+      throw new DomainError("invalid_working_directory", `工作目录不是有效的 Git 仓库: ${absPath}`, 400);
+    }
+  }
+  if (!/^[a-f0-9]{40}$/.test(resolvedSha)) {
+    throw new DomainError("invalid_base_sha", "baseSha 必须是完整的 40 位 commit SHA", 400);
+  }
+
+  // Check if we already imported this path (by name convention)
+  const dirName = path.basename(absPath);
+  const existing = await db.query(
+    "SELECT id, base_sha FROM collab.repositories WHERE project_id=$1 AND name=$2 AND provider='local' ORDER BY created_at DESC LIMIT 1",
+    [projectId, dirName]
+  );
+  if (existing.rows[0]) {
+    return { repositoryId: String(existing.rows[0].id), baseSha: resolvedSha };
+  }
+
+  // Create new repository record
+  const repositoryId = randomUUID();
+  const dataRoot = path.resolve(process.env.PI_COLLAB_DATA_DIR ?? ".local");
+  const repoPath = path.join(dataRoot, "repositories", repositoryId, "git");
+
+  await projectRole(db, projectId, "task.create");
+  await db.query(
+    "INSERT INTO collab.repositories (id, organization_id, project_id, name, provider, base_sha, default_branch) " +
+    "SELECT $1, organization_id, $2, $3, 'local', $4, 'main' FROM collab.projects WHERE id=$2",
+    [repositoryId, projectId, dirName.slice(0, 120), resolvedSha]
+  );
+
+  // Copy the working directory to the managed location
+  await mkdir(path.dirname(repoPath), { recursive: true, mode: 0o700 });
+  await cp(absPath, repoPath, { recursive: true, filter: (src) => !src.includes("/.git/") || src.endsWith("/.git") });
+
+  // Ensure it's a valid git repo at the managed location
+  try {
+    await exec("git", ["-C", repoPath, "rev-parse", "HEAD"], { timeout: 10000 });
+  } catch {
+    // If copy didn't preserve .git, init it
+    await exec("git", ["-C", repoPath, "init", "-q"], { timeout: 10000 });
+    await exec("git", ["-C", repoPath, "add", "-A"], { timeout: 10000 });
+    await exec("git", ["-C", repoPath, "-c", "user.name=pi-collab", "-c", "user.email=agent@pi-collab.local", "commit", "-qm", "import"], { timeout: 10000 });
+    const { stdout } = await exec("git", ["-C", repoPath, "rev-parse", "HEAD"], { timeout: 10000 });
+    resolvedSha = stdout.trim();
+    await db.query("UPDATE collab.repositories SET base_sha=$1 WHERE id=$2", [resolvedSha, repositoryId]);
+  }
+
+  return { repositoryId, baseSha: resolvedSha };
+}
+
 export function startRun(userId: string, taskId: string, raw: z.input<typeof runInput>): Promise<AcceptedCommand> {
   uuid.parse(taskId); const input = runInput.parse(raw);
-  return asUser(userId, async db => (await db.query("SELECT collab.submit_work_run($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS result", [taskId, input.repositoryId, input.baseSha, input.prompt, process.env.PI_COLLAB_RUNTIME ?? "native", input.idempotencyKey, input.expectedVersion, input.modelProfileId ?? null, input.snapshotId ?? null, input.suggestionId ?? null, input.editorVersionId ?? null, input.executionKind])).rows[0].result);
+  return asUser(userId, async db => {
+    let repositoryId = input.repositoryId;
+    let baseSha = input.baseSha;
+    // Simplification: workingDirectory → auto-import as repository
+    if (input.workingDirectory) {
+      const task = (await db.query("SELECT project_id FROM collab.tasks WHERE id=$1", [taskId])).rows[0];
+      if (!task) throw new DomainError("not_found", "任务不存在或不可访问。", 404);
+      const imported = await ensureLocalRepository(db, userId, String(task.project_id), input.workingDirectory, baseSha);
+      repositoryId = imported.repositoryId;
+      baseSha = imported.baseSha;
+    }
+    if (!repositoryId || !baseSha) throw new DomainError("invalid_input", "需要提供 repositoryId 或 workingDirectory", 400);
+    return (await db.query("SELECT collab.submit_work_run($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS result", [taskId, repositoryId, baseSha, input.prompt, process.env.PI_COLLAB_RUNTIME ?? "native", input.idempotencyKey, input.expectedVersion, input.modelProfileId ?? null, input.snapshotId ?? null, input.suggestionId ?? null, input.editorVersionId ?? null, input.executionKind])).rows[0].result;
+  });
 }
 export function stopRun(userId: string, runId: string, raw: z.infer<typeof stopInput>): Promise<AcceptedCommand> {
   uuid.parse(runId); const input = stopInput.parse(raw);
