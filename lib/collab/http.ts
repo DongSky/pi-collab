@@ -85,6 +85,8 @@ export async function endpoint(request: Request, operation: () => Promise<unknow
       editor_version_used: [409, "该版本已交给另一次运行，请打开原运行。"],
       editor_exists: [409, "任务已有共编草稿，请打开现有草稿。"],
       editor_document_limit: [409, "草稿最多 40 个文件，每人每个文件最多 8 个在线窗口。"],
+      invalid_local_binding: [400, "本地目录路径无效：需要本机已存在的绝对路径目录，且不能是服务端数据目录。"],
+      local_binding_conflict: [409, "此本地目录已关联到另一个项目，请先解绑或选择其他目录。"],
       editor_client_conflict: [409, "编辑窗口标识冲突，请保存本地内容后重新打开。"],
       invalid_editor_command: [400, "请填写版本说明并检查操作。"],
       installation_draining: [503, "实例正在排空升级，暂不接收新作业。"],

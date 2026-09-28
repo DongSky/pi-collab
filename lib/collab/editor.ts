@@ -7,7 +7,8 @@ import type { PoolClient } from "pg";
 import { asUser } from "./database";
 import { DomainError } from "./policy";
 import { loadSnapshot, safeSnapshotPath, snapshotExcludedPath, snapshotHasSecret } from "./runtime/snapshots";
-import { documentSaveAs, documentInput, documentSync, editorAction, editorOpen, type EditorDetail, type EditorSession, type EditorSync } from "./editor-schema";
+import { documentSaveAs, documentInput, documentSync, editorAction, editorOpen, type EditorDetail, type EditorSession, type EditorSync, type EditorWriteback } from "./editor-schema";
+import { runDocumentWriteback } from "./local-writeback";
 const root = () => process.env.PI_COLLAB_DATA_DIR ?? path.resolve(".local");
 const invalid = () => new DomainError("editor_content_unavailable", "此文件包含受限路径、非文本内容或超出共编限制。", 400);
 export function validateEditorPath(file: string) { if (!safeSnapshotPath(file) || snapshotExcludedPath(file)) throw invalid(); }
@@ -53,7 +54,7 @@ export function syncDocument(userId: string,id: string,raw: unknown): Promise<Ed
   await db.query("SELECT collab.editor_lock($1,$2,false)",[id,changing]);
   const s=await session(db,id); let d=(await db.query("SELECT * FROM collab.editor_documents WHERE id=$1 AND session_id=$2",[input.documentId,id])).rows[0];
   if(!d)throw new DomainError("not_found","文件不存在或不可访问。",404);
-  let conflict:EditorSync["conflict"],merged=false;
+  let conflict:EditorSync["conflict"],merged=false,writeback:EditorWriteback|undefined;
   const doc=new Y.Doc();try{
    Y.applyUpdate(doc,d.y_state);const text=doc.getText("code");
    if(changing){
@@ -85,8 +86,12 @@ export function syncDocument(userId: string,id: string,raw: unknown): Promise<Ed
     validateEditorText(text.toString());const state=Buffer.from(Y.encodeStateAsUpdate(doc));if(state.length>1048576)throw invalid();
     // Reject unresolved causal updates: a successful acknowledgement must persist every submitted edit.
     if(doc.store.pendingStructs||doc.store.pendingDs)throw new DomainError("editor_incomplete_update","缺少前序编辑，请重新同步完整草稿。",409);
+    const markedDeleted=input.deleted===true;
     await db.query("SELECT collab.save_editor_document($1,$2,$3,$4,$5,$6,$7,$8)",[id,d.path,d.base_hash,d.original_text,text.toString(),state,d.revision,input.deleted??d.deleted]);
     d=(await db.query("SELECT * FROM collab.editor_documents WHERE id=$1",[d.id])).rows[0];
+    // Direct-link mode: mirror the saved content into the bound local directory
+    // with the same three-way merge semantics. Write-back never fails the save.
+    writeback=await runDocumentWriteback(db,s.project_id,{id:d.id,path:d.path,content:d.content,original_text:d.original_text},{deleted:markedDeleted}).catch(error=>({status:"error",message:error instanceof Error?error.message:"本地回写失败"} as EditorWriteback));
     }
    }
    let selection:unknown=null;
@@ -95,7 +100,7 @@ export function syncDocument(userId: string,id: string,raw: unknown): Promise<Ed
    }
    await db.query("SELECT collab.touch_editor_presence($1,$2,$3)",[d.id,input.clientId,selection===null?null:JSON.stringify(selection)]);
    const presence=(await db.query(`SELECT p.client_id::float8 AS "clientId",p.user_id AS "userId",u.name,p.selection FROM collab.editor_presence p JOIN public."user" u ON u.id=p.user_id JOIN collab.project_memberships pm ON pm.user_id=p.user_id AND pm.project_id=$2 AND pm.active JOIN collab.memberships m ON m.user_id=p.user_id AND m.organization_id=pm.organization_id AND m.active WHERE p.document_id=$1 AND p.seen_at>now()-interval '30 seconds' ORDER BY p.client_id`,[d.id,s.project_id])).rows;
-   const updated=await session(db,id);return {conflict,merged,document:{id:d.id,path:d.path,deleted:d.deleted,revision:d.revision,state:d.y_state.toString("base64"),baseToken:editorBaseToken(d.id,d.revision,d.content)},session:updated,canWrite:writable(updated)&&!d.deleted,presence};
+   const updated=await session(db,id);return {conflict,merged,writeback,document:{id:d.id,path:d.path,deleted:d.deleted,revision:d.revision,state:d.y_state.toString("base64"),baseToken:editorBaseToken(d.id,d.revision,d.content)},session:updated,canWrite:writable(updated)&&!d.deleted,presence};
   }finally{doc.destroy();}
  });
 }

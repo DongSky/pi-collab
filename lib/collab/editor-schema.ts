@@ -11,4 +11,10 @@ export type EditorSession = { id: string; snapshot_id: string; manifest_hash: st
 export type EditorDocument = { id: string; path: string; deleted: boolean; revision: string };
 export type EditorDetail = { session: EditorSession; canWrite: boolean; canManage: boolean; files: string[]; documents: EditorDocument[]; versions: { id: string; version: string; note: string; created_at: string; payload: EditorPayload }[] };
 export type EditorConflict = { base:string;local:string;remote:string;merged:string;revision:string;baseToken:string };
-export type EditorSync = { conflict?:EditorConflict; merged?:boolean; document: EditorDocument & { state: string; baseToken:string }; session: EditorSession; canWrite: boolean; presence: { clientId: number; name: string; userId: string; selection: unknown }[] };
+export type EditorWritebackConflict = { base:string;local:string|null;remote:string|null;merged:string };
+export type EditorWriteback =
+ | { status:"unbound" }
+ | { status:"in-sync"|"written"|"merged"|"deleted";localPath:string;path:string }
+ | { status:"conflict";localPath:string;path:string;conflict:EditorWritebackConflict }
+ | { status:"error";message:string };
+export type EditorSync = { conflict?:EditorConflict; merged?:boolean; writeback?:EditorWriteback; document: EditorDocument & { state: string; baseToken:string }; session: EditorSession; canWrite: boolean; presence: { clientId: number; name: string; userId: string; selection: unknown }[] };

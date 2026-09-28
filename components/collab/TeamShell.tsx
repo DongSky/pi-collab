@@ -3,6 +3,7 @@ import { Activity, useCallback, useRef, useEffect, useState, type CSSProperties,
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { OpenFolder } from "./OpenFolder";
+import { LocalBindingPanel } from "./LocalBindingPanel";
 import { workspaceFile } from "./WorkspaceFiles";
 import { OperationsStatus } from "./OperationsStatus";
 import { HistoryImport } from "./HistoryImport";
@@ -151,6 +152,7 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
     <aside className="collab-sidebar wb-sidebar" aria-label="工作台侧边栏"><div className="wb-sidebar-heading"><strong>{sidebarMode==="files"?"资源管理器":"项目与任务"}</strong><button className="collab-text-button" onClick={()=>setSidebar(false)} aria-label="收起侧栏"><WorkbenchIcon name="panel"/></button></div>
       <label className="wb-project-select">当前项目<select aria-label="当前项目" value={selected} onChange={e=>switchProject(e.target.value)}>{!catalogue.projects.length&&<option value="">尚无项目</option>}{catalogue.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       {canWrite&&<button className="collab-button wb-open-folder" onClick={openFolder}>＋ 打开文件夹…</button>}
+      <LocalBindingPanel projectId={selected} canManage={!!canWrite}/>
       <div className="wb-sidebar-switch"><button aria-pressed={sidebarMode==="files"} onClick={showExplorer}>文件</button><button aria-pressed={sidebarMode==="tasks"} onClick={()=>setSidebarMode("tasks")}>任务</button></div>
       <div className="wb-explorer-host" ref={files.setSidebarHost} hidden={sidebarMode!=="files"}/>
       <div className="wb-sidebar-task-content" hidden={sidebarMode!=="tasks"}>
