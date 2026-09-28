@@ -6,7 +6,8 @@ import { listSessionFamilies } from "@/lib/session-family";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
-import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
+import { getProjectActivity, getRecentProjects, mergePinnedProjects, sessionsForProject } from "@/lib/project-groups";
+import type { PinnedProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
@@ -166,6 +167,7 @@ interface ValidatedProject {
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
+const PINNED_PROJECTS_STORAGE_KEY = "pi-web:pinned-projects";
 const RUNNING_SESSIONS_POLL_MS = 2500;
 const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
 const SESSION_PANE_DEFAULT_HEIGHT = 320;
@@ -186,6 +188,39 @@ function saveLastCustomCwd(cwd: string): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(LAST_CUSTOM_CWD_STORAGE_KEY, cwd);
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+/** Pinned project directories: survive session deletion, Codex-style. */
+function loadPinnedProjects(): PinnedProject[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(PINNED_PROJECTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: PinnedProject[] = [];
+    for (const entry of parsed) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const { key, root } = entry as { key?: unknown; root?: unknown };
+      if (typeof key !== "string" || !key || typeof root !== "string" || !root) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, root });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedProjects(pinned: readonly PinnedProject[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(pinned));
   } catch {
     // Persistence is best-effort.
   }
@@ -400,6 +435,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [customPathError, setCustomPathError] = useState<string | null>(null);
   const [customPathValidating, setCustomPathValidating] = useState(false);
   const [validatedProject, setValidatedProject] = useState<ValidatedProject | null>(null);
+  // Pinned project directories (persisted): the project list stays usable
+  // like a Codex project registry even after all sessions are deleted.
+  const [pinnedProjects, setPinnedProjects] = useState<PinnedProject[]>(loadPinnedProjects);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Worktree switcher state
   const [worktreeState, setWorktreeState] = useState<WorktreeState | null>(null);
@@ -743,10 +781,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     const match = allSessions.find((session) => (
       session.cwd === cwd || (session.projectRoot ?? session.cwd) === cwd
     ));
-    return match
-      ? projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match))
-      : projectSelection(cwd, cwd);
-  }, [validatedProject, worktreeState, allSessions, projectSelection]);
+    if (match) return projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match));
+    // A pinned directory with no sessions yet still resolves to its stored
+    // stable key instead of a raw-path fallback.
+    const pinned = pinnedProjects.find((p) => p.root === cwd);
+    if (pinned) return projectSelection(pinned.root, pinned.key);
+    return projectSelection(cwd, cwd);
+  }, [validatedProject, worktreeState, allSessions, pinnedProjects, projectSelection]);
 
   // A worktree/session refresh can hydrate the stable key without changing
   // cwd, so notify when either changes. The parent treats same-cwd key changes
@@ -848,6 +889,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     : undefined;
   const currentWorktreePath = currentWorktree?.path ?? null;
 
+  const addPinnedProject = useCallback((key: string, root: string) => {
+    setPinnedProjects((prev) => {
+      if (prev.some((p) => p.key === key)) return prev;
+      const next = [...prev, { key, root }];
+      savePinnedProjects(next);
+      return next;
+    });
+  }, []);
+
+  const removePinnedProject = useCallback((key: string) => {
+    setPinnedProjects((prev) => {
+      const next = prev.filter((p) => p.key !== key);
+      if (next.length === prev.length) return prev;
+      savePinnedProjects(next);
+      return next;
+    });
+  }, []);
+
   const commitCustomPath = useCallback(async (candidate?: string) => {
     const path = (candidate ?? customPathValue).trim();
     if (!path || customPathValidating) return;
@@ -876,6 +935,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         key: data.projectKey,
       });
       saveLastCustomCwd(data.cwd);
+      // An explicitly chosen directory becomes a persistent project entry,
+      // so it stays in the switcher even with no sessions yet (Codex-style).
+      addPinnedProject(data.projectKey, data.projectRoot);
       setCustomPathValue(data.cwd);
       setSelectedCwd(data.cwd);
       setCustomPathOpen(false);
@@ -885,7 +947,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } finally {
       setCustomPathValidating(false);
     }
-  }, [customPathValue, customPathValidating]);
+  }, [customPathValue, customPathValidating, addPinnedProject]);
 
   const handleCustomPathClick = useCallback(() => {
     setCustomPathOpen(true);
@@ -1015,10 +1077,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [selectedCwd, onNewSession]);
 
   const recentProjects = getRecentProjects(allSessions);
-  const showProjectFilter = recentProjects.length > 8;
+  const allProjects = useMemo(
+    () => mergePinnedProjects(recentProjects, pinnedProjects),
+    [recentProjects, pinnedProjects],
+  );
+  const showProjectFilter = allProjects.length > 8;
   const visibleProjects = projectFilter.trim()
-    ? recentProjects.filter((project) => project.root.toLowerCase().includes(projectFilter.trim().toLowerCase()))
-    : recentProjects;
+    ? allProjects.filter((project) => project.root.toLowerCase().includes(projectFilter.trim().toLowerCase()))
+    : allProjects;
 
   // Sessions of every worktree in the selected project are shown together
   const selectedProject = projectFor(selectedCwd);
@@ -1315,6 +1381,47 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     {project.key !== selectedProject?.key && <span style={{ width: 10, flexShrink: 0 }} />}
                     <PathLabel text={displayCwd(project.root, homeDir)} style={{ flex: 1 }} />
                     {showProjectActivity(projectActivity.get(project.key), t)}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={project.pinned ? t("sidebar.unpinProject") : t("sidebar.pinProject")}
+                      aria-label={project.pinned ? t("sidebar.unpinProject") : t("sidebar.pinProject")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (project.pinned) removePinnedProject(project.key);
+                        else addPinnedProject(project.key, project.root);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (project.pinned) removePinnedProject(project.key);
+                          else addPinnedProject(project.key, project.root);
+                        }
+                      }}
+                      style={{
+                        flexShrink: 0,
+                        display: "inline-flex",
+                        padding: 2,
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        color: project.pinned ? "var(--accent)" : "var(--text-dim)",
+                        opacity: project.pinned ? 1 : 0.45,
+                      }}
+                    >
+                      <svg
+                        width="10"
+                        height="10"
+                        viewBox="0 0 10 10"
+                        fill={project.pinned ? "currentColor" : "none"}
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M6.8 1.2l2 2-.9.9-1.6-.4-2.9 4.9-.9-.5 2.9-4.9-.4-1.6z" />
+                      </svg>
+                    </span>
                   </button>
                 ))}
                 {visibleProjects.length === 0 && projectFilter.trim() && (
