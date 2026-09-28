@@ -40,9 +40,23 @@ export class NativeRuntimeBackend implements RuntimeBackend {
   async start(workspace: WorkspaceLocation, model?: { provider: string; id: string }, identity?: LaunchIdentity, coordination?: CoordinationAccess): Promise<AgentProcess> {
     const piEntry = await nativePiEntry();
     if(workspace.port) {
-      const port=workspace.port;
-      if(!Number.isInteger(port)||port<41000||port>60999)throw new Error("Invalid workspace port");
-      await new Promise<void>((resolve,reject)=>{const probe=createServer();probe.once("error",()=>reject(new Error("workspace_port_occupied")));probe.listen(port,"127.0.0.1",()=>probe.close(error=>error?reject(error):resolve()));});
+      const basePort=workspace.port;
+      if(!Number.isInteger(basePort)||basePort<41000||basePort>60999)throw new Error("Invalid workspace port");
+      // The database-allocated port may still be held at OS level by a lingering
+      // process (e.g. TIME_WAIT or slow cleanup). Probe and fall through to the
+      // next free port instead of failing the whole run.
+      let allocatedPort: number | null = null;
+      for(let attempt=0; attempt<200; attempt++) {
+        const candidate = 41000 + ((basePort - 41000 + attempt) % 20000);
+        const free = await new Promise<boolean>(resolve=>{
+          const probe=createServer();
+          probe.once("error",()=>resolve(false));
+          probe.listen(candidate,"127.0.0.1",()=>probe.close(error=>resolve(!error)));
+        });
+        if(free) { allocatedPort=candidate; break; }
+      }
+      if(allocatedPort===null) throw new Error("workspace_port_occupied");
+      workspace.port=allocatedPort;
     }
     const receipt = await beginNativeReceipt(workspace, identity);
     const child = spawn(process.execPath, [piEntry, ...piArguments, ...(coordination ? ["--extension", fileURLToPath(new URL("./coordination-extension.ts", import.meta.url))] : []), ...(model ? ["--provider", model.provider, "--model", model.id, "--thinking", "off"] : [])], {
