@@ -2,32 +2,40 @@ import { z } from "zod";
 
 // Maintainer-authored, immutable configuration. Arguments are an array, never
 // parsed as a shell command. Repository scripts still execute trusted code.
+// Supported tools cover mainstream languages: JS/TS (node/npm), Python, Go, Rust, Java, Ruby.
+const VALIDATION_TOOLS = ["node", "npm", "python", "python3", "pip", "pip3", "pytest", "go", "cargo", "mvn", "gradle", "java", "ruby", "bundle", "php", "composer"] as const;
 export const validationConfig = z.object({
   version: z.literal(1),
   steps: z.array(z.object({
-    tool: z.enum(["node", "npm"]),
+    tool: z.enum(VALIDATION_TOOLS),
     args: z.array(z.string().max(1000).refine(value => !/[\x00-\x1f\x7f]/.test(value))).min(1).max(32),
     timeoutSeconds: z.number().int().min(1).max(600),
   }).strict()).min(1).max(5),
 }).strict().refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 16 * 1024, "验证配置不能超过 16 KiB");
 export type ValidationConfig = z.infer<typeof validationConfig>;
+export type ValidationTool = typeof VALIDATION_TOOLS[number];
 export const validationProfileInput = z.object({ repositoryId: z.uuid(), name: z.string().trim().min(1).max(120), config: validationConfig, idempotencyKey: z.uuid() }).strict();
 export const validationInput = z.object({ profileId: z.uuid(), idempotencyKey: z.uuid() }).strict();
 // Quick validation: run a single command directly without creating a profile first.
 // The command is parsed into a single validation step (e.g. "npm test" -> {tool:"npm",args:["test"]}).
 export const quickValidationInput = z.object({ command: z.string().trim().min(1).max(500), idempotencyKey: z.uuid() }).strict();
 
-/** Parse a quick command like "npm test" or "node --test" into a validation step. */
-export function parseQuickCommand(command: string): { tool: "node" | "npm"; args: string[]; timeoutSeconds: number } {
+/** Parse a quick command like "npm test" or "pytest" into a validation step. */
+export function parseQuickCommand(command: string): { tool: ValidationTool; args: string[]; timeoutSeconds: number } {
   const trimmed = command.trim();
   const parts = trimmed.split(/\s+/);
-  const tool = parts[0];
-  if (tool !== "node" && tool !== "npm") {
-    throw new Error(`快速验证只支持 node 或 npm 开头，例如 "npm test" 或 "node --test"。`);
+  const tool = parts[0] as ValidationTool;
+  if (!(VALIDATION_TOOLS as readonly string[]).includes(tool)) {
+    throw new Error(`快速验证支持的命令：${VALIDATION_TOOLS.join(", ")}。例如 "npm test"、"pytest"、"go test"、"cargo test"。`);
   }
   const args = parts.slice(1);
   if (!args.length) {
-    throw new Error(`请提供完整的命令，例如 "npm test"。`);
+    // Allow bare tool names like "pytest" (defaults to running the tool with no args,
+    // which for test runners typically discovers and runs tests)
+    // But for node/npm, require args to avoid ambiguous behavior
+    if (tool === "node" || tool === "npm") {
+      throw new Error(`请提供完整的命令，例如 "npm test"。`);
+    }
   }
   // Basic safety: reject shell metacharacters since args are passed directly (not via shell).
   for (const arg of args) {

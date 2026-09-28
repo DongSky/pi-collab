@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { release } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { findNodeCliScript } from "../../node-cli";
-import { validationConfig, type ValidationConfig } from "../validation-config";
+import { validationConfig, type ValidationConfig, type ValidationTool } from "../validation-config";
 import { loadSnapshot, materializeDependencyInputs, restoreSnapshot, verifyDependencyInputs, verifySnapshotWorkingTree } from "./snapshots";
 import type { DependencyPin } from "../dependency-inputs";
 import type { ContractPin } from "../contract-schema";
@@ -26,7 +26,7 @@ export interface ValidationClaim {
   repositoryId: string; profileId: string; config: ValidationConfig;
 }
 export interface StepEvidence {
-  tool: "node" | "npm"; args: string[]; timeoutSeconds: number; exitCode: number | null; signal: string | null;
+  tool: ValidationTool; args: string[]; timeoutSeconds: number; exitCode: number | null; signal: string | null;
   startedAt: string; finishedAt: string; outputBytes: number; outputHash: string; hashedBytes: number; outputTruncated: boolean;
   error: string | null; cleanupConfirmed: boolean; sourceUnchanged: boolean;
 }
@@ -50,11 +50,40 @@ async function durable(file: string, value: unknown) {
   }
 }
 
-async function runStep(step: ValidationConfig["steps"][number], args: string[], cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<StepEvidence> {
+/** Find a binary in PATH. Returns null if not found. */
+function findBinary(name: string): string | null {
+  try {
+    const result = execSync(`command -v ${name}`, { encoding: "utf8", timeout: 5000 }).trim();
+    return result || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the executable and args for a validation step. */
+function resolveStepCommand(step: ValidationConfig["steps"][number]): { execPath: string; args: string[] } {
+  // npm runs via node (like the original code)
+  if (step.tool === "npm") {
+    const npm = findNodeCliScript("npm");
+    if (!npm) throw new Error("validation_npm_unavailable");
+    return { execPath: process.execPath, args: [npm, ...step.args] };
+  }
+  // node runs directly
+  if (step.tool === "node") {
+    return { execPath: process.execPath, args: step.args };
+  }
+  // Other tools: find in PATH and run directly
+  const binary = findBinary(step.tool);
+  if (!binary) throw new Error(`validation_tool_unavailable: ${step.tool}`);
+  return { execPath: binary, args: step.args };
+}
+
+async function runStep(step: ValidationConfig["steps"][number], cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<StepEvidence> {
   const startedAt = new Date().toISOString(), output = createHash("sha256");
   let bytes = 0, hashedBytes = 0, error: string | null = null, closed = false;
   let exitCode: number | null = null, exitSignal: string | null = null;
-  const child = spawn(process.execPath, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const { execPath, args } = resolveStepCommand(step);
+  const child = spawn(execPath, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   const groupAlive = () => {
     if (!child.pid) return false;
     try { process.kill(-child.pid, 0); return true; }
@@ -124,7 +153,6 @@ export async function validateSnapshot(root: string, claim: ValidationClaim, sig
   await materializeContractInputs(workspace.root, manifest.contracts);
   await materializeResolutionInputs(workspace.root, resolution);
   const npm = config.steps.some(step => step.tool === "npm") ? findNodeCliScript("npm") : null;
-  if (config.steps.some(step => step.tool === "npm") && !npm) throw new Error("validation_npm_unavailable");
   const evidence: ValidationEvidence = {
     version: 1, validationId: claim.id, snapshotId: claim.snapshotId, manifestHash: claim.manifestHash, worktreeCommit: manifest.worktreeCommit,
     profileId: claim.profileId, configHash, config, dependencies: manifest.dependencies, contracts: manifest.contracts,
@@ -142,7 +170,7 @@ export async function validateSnapshot(root: string, claim: ValidationClaim, sig
     npm_config_cache: path.join(workspace.home, ".npm"), npm_config_userconfig: userConfig, npm_config_globalconfig: globalConfig, npm_config_update_notifier: "false" };
   for (const step of config.steps) {
     if (signal.aborted) { evidence.outcome = "cancelled"; break; }
-    const result = await runStep(step, step.tool === "npm" ? [npm!, ...step.args] : step.args, workspace.checkout, env, signal);
+    const result = await runStep(step, workspace.checkout, env, signal);
     evidence.steps.push(result);
     if (!result.cleanupConfirmed) { evidence.outcome = "unknown"; break; }
     try { await verifySnapshotWorkingTree(workspace.checkout, manifest); await verifyDependencyInputs(root, workspace.root, manifest.dependencies); await verifyContractInputs(workspace.root, manifest.contracts); await verifyResolutionInputs(workspace.root, resolution); result.sourceUnchanged = true; }

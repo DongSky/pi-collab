@@ -1,7 +1,7 @@
 import { asUser } from "./database";
 import { projectRole, uuid } from "./projects";
 import { DomainError } from "./policy";
-import { validationInput, validationProfileInput, quickValidationInput, parseQuickCommand } from "./validation-config";
+import { validationInput, validationProfileInput, quickValidationInput, parseQuickCommand, type ValidationTool } from "./validation-config";
 import type { z } from "zod";
 
 export function createValidationProfile(userId: string, projectId: string, raw: z.infer<typeof validationProfileInput>) {
@@ -23,7 +23,7 @@ export function requestValidation(userId: string, snapshotId: string, raw: z.inf
  *  This lets users run a check without first creating a named profile (Cursor-style: just run the command). */
 export function requestQuickValidation(userId: string, snapshotId: string, raw: z.infer<typeof quickValidationInput>) {
   uuid.parse(snapshotId); const input = quickValidationInput.parse(raw);
-  let step: { tool: "node" | "npm"; args: string[]; timeoutSeconds: number };
+  let step: { tool: ValidationTool; args: string[]; timeoutSeconds: number };
   try {
     step = parseQuickCommand(input.command);
   } catch (e) {
