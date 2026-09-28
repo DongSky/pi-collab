@@ -37,7 +37,7 @@ type Repository = { id: string; name: string; base_sha: string; default_branch: 
 type Model = { id: string; name: string; enabled: boolean; run_request_limit: number; run_token_limit: number };
 type VisibleEvent = { type: string; text?: string; toolName?: string; isError?: boolean; message?: { role: string; content: { text?: string }[]; errorMessage?: string }; content?: { text?: string }[] };
 type Batch = { sequence: string; payload: { events: VisibleEvent[] } };
-type Start = { repositoryId: string; baseSha: string; prompt: string; expectedVersion: number; idempotencyKey: string; modelProfileId?: string; executionKind?: "ai" | "terminal"; snapshotId?: string; suggestionId?: string; editorVersionId?: string };
+type Start = { repositoryId?: string; workingDirectory?: string; baseSha?: string; prompt: string; expectedVersion: number; idempotencyKey: string; modelProfileId?: string; executionKind?: "ai" | "terminal"; snapshotId?: string; suggestionId?: string; editorVersionId?: string };
 type RunAction = { action: "recover" | "archive"; reason: string; idempotencyKey: string; expectedRevision: string };
 const names: Record<string, string> = { queued: "排队中", starting: "准备工作区", running: "AI 执行中", waiting_input: "等待输入", stopping: "正在停止", completed: "本次运行结束", failed: "运行失败", cancelled: "已停止", reconciling: "待对账 · 工作区已隔离" };
 const terminal = new Set(["completed", "failed", "cancelled"]);
@@ -178,7 +178,7 @@ export function TaskRuns({ visible, task, tasks, projectId, userId, role, runtim
       }
       if (saved.pending) {
         const p = saved.pending;
-        setPending(p); setPrompt(p.prompt); setExecutionKind(p.executionKind); setRepositoryId(p.repositoryId);
+        setPending(p); setPrompt(p.prompt); setExecutionKind(p.executionKind); setRepositoryId(p.repositoryId ?? "");
         setModelId(p.modelProfileId ?? ""); setSnapshotId(p.snapshotId ?? ""); setSuggestionId(p.suggestionId ?? ""); setEditorVersionId(p.editorVersionId ?? "");
       }
       setDraftReady(true); setDraftError("");
