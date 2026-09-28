@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   description: "Collaborative development with independent AI workspaces",
   applicationName: "pi-collab",
   manifest: "/manifest.webmanifest",
+  other: {
+    google: "notranslate",
+  },
   icons: {
     icon: [
       {
@@ -61,15 +64,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang={process.env.PI_COLLAB_MODE === "legacy" ? "en" : "zh-CN"} data-collab={process.env.PI_COLLAB_MODE === "legacy" ? undefined : "team"} translate="no" className={`${notoSansMono.variable} notranslate`} suppressHydrationWarning>
-      <head>
-        <meta name="google" content="notranslate" />
+      <body translate="no" className="notranslate" suppressHydrationWarning>
         <script
           dangerouslySetInnerHTML={{
             __html: THEME_INIT_SCRIPT,
           }}
         />
-      </head>
-      <body translate="no" className="notranslate" suppressHydrationWarning>
         {children}
         {process.env.PI_COLLAB_MODE === "legacy" && <PwaRegistration />}
       </body>
