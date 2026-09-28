@@ -14,7 +14,10 @@ export type EditorConflict = { base:string;local:string;remote:string;merged:str
 export type EditorWritebackConflict = { base:string;local:string|null;remote:string|null;merged:string };
 export type EditorWriteback =
  | { status:"unbound" }
- | { status:"in-sync"|"written"|"merged"|"deleted";localPath:string;path:string }
- | { status:"conflict";localPath:string;path:string;conflict:EditorWritebackConflict }
+ | { status:"needs-local-path" }
+ | { status:"in-sync"|"written"|"merged"|"deleted";scope:"binding";localPath:string;path:string }
+ | { status:"in-sync"|"written"|"merged"|"deleted";scope:"document";localPath:string }
+ | { status:"conflict";scope:"binding";localPath:string;path:string;conflict:EditorWritebackConflict }
+ | { status:"conflict";scope:"document";localPath:string;conflict:EditorWritebackConflict }
  | { status:"error";message:string };
 export type EditorSync = { conflict?:EditorConflict; merged?:boolean; writeback?:EditorWriteback; document: EditorDocument & { state: string; baseToken:string }; session: EditorSession; canWrite: boolean; presence: { clientId: number; name: string; userId: string; selection: unknown }[] };

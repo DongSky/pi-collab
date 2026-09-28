@@ -63,6 +63,12 @@ interface Props {
   compactResult?: CompactResultInfo | null;
   toolPreset?: ToolPreset;
   onToolPresetChange?: (preset: ToolPreset) => void;
+  /** 单人 Agent 自动验证：写完代码后自动跑验证命令，失败让 Agent 继续修复。 */
+  autoVerifyEnabled?: boolean;
+  onAutoVerifyEnabledChange?: (enabled: boolean) => void;
+  autoVerifyCommands?: string[] | null;
+  onAutoVerifyCommandsChange?: (commands: string[] | null) => void;
+  autoVerifyMaxRounds?: number;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   /** New session has not committed a thinking level; the button still shows the resolved default. */
   isAutoThinkingSelection?: boolean;
@@ -551,6 +557,7 @@ export function ModelScopeWarningBanner({ warnings }: { warnings?: string[] }) {
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
+  autoVerifyEnabled, onAutoVerifyEnabledChange, autoVerifyCommands, onAutoVerifyCommandsChange, autoVerifyMaxRounds,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
@@ -566,6 +573,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const isMobile = useIsMobile();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
+  const [autoVerifyDropdownOpen, setAutoVerifyDropdownOpen] = useState(false);
+  const [autoVerifyCommandsDraft, setAutoVerifyCommandsDraft] = useState("");
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() => (
@@ -599,6 +608,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
+  const autoVerifyDropdownRef = useRef<HTMLDivElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
@@ -1546,6 +1556,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (toolDropdownRef.current && !toolDropdownRef.current.contains(e.target as Node)) {
         setToolDropdownOpen(false);
       }
+      if (autoVerifyDropdownRef.current && !autoVerifyDropdownRef.current.contains(e.target as Node)) {
+        setAutoVerifyDropdownOpen(false);
+      }
       if (thinkingDropdownRef.current && !thinkingDropdownRef.current.contains(e.target as Node)) {
         setThinkingDropdownOpen(false);
       }
@@ -1564,6 +1577,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!isStreaming) return;
     setThinkingDropdownOpen(false);
     setToolDropdownOpen(false);
+    setAutoVerifyDropdownOpen(false);
   }, [isStreaming]);
 
   useEffect(() => {
@@ -2573,6 +2587,97 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                         </button>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+            {!isStreaming && onAutoVerifyEnabledChange && (
+              <div ref={autoVerifyDropdownRef} style={{ position: "relative" }}>
+                <button
+                  onClick={() => {
+                    if (!autoVerifyDropdownOpen) {
+                      setAutoVerifyCommandsDraft((autoVerifyCommands ?? []).join("\n"));
+                    }
+                    setAutoVerifyDropdownOpen((v) => !v);
+                  }}
+                  disabled={isStreaming}
+                  title={t("chat.autoVerifyTitle")}
+                  aria-label={t("chat.autoVerify")}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                    padding: isMobile ? "0 6px" : "8px 12px",
+                    width: isMobile ? "auto" : undefined,
+                    height: 32,
+                    background: autoVerifyDropdownOpen ? "var(--bg-hover)" : "none",
+                    border: "none",
+                    borderRadius: 9,
+                    color: autoVerifyEnabled ? "var(--accent)" : "var(--text-muted)",
+                    cursor: isStreaming ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    opacity: isStreaming ? 0.5 : 1,
+                    transition: "background 0.12s, color 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (isStreaming) return;
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    if (!autoVerifyEnabled) e.currentTarget.style.color = "var(--text)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = autoVerifyDropdownOpen ? "var(--bg-hover)" : "none";
+                    e.currentTarget.style.color = autoVerifyEnabled ? "var(--accent)" : "var(--text-muted)";
+                  }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <polyline points="22 4 12 14.01 9 11.01" />
+                  </svg>
+                  {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.autoVerify")}</span>}
+                </button>
+                {autoVerifyDropdownOpen && (
+                  <div style={{
+                    position: "absolute",
+                    bottom: "calc(100% + 6px)",
+                    right: isMobile ? undefined : 0,
+                    left: isMobile ? 0 : undefined,
+                    zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
+                    borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
+                    padding: 12, minWidth: 240, maxWidth: 300,
+                  }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, color: "var(--text)" }}>
+                      <input
+                        type="checkbox"
+                        checked={!!autoVerifyEnabled}
+                        onChange={(e) => onAutoVerifyEnabledChange(e.target.checked)}
+                        style={{ accentColor: "var(--accent)" }}
+                      />
+                      {t("chat.autoVerifyLabel")}
+                    </label>
+                    <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-muted)" }}>
+                      {t("chat.autoVerifyCommandsLabel")}
+                    </div>
+                    <textarea
+                      value={autoVerifyCommandsDraft}
+                      onChange={(e) => setAutoVerifyCommandsDraft(e.target.value)}
+                      onBlur={() => {
+                        const commands = autoVerifyCommandsDraft.split("\n").map((c) => c.trim()).filter(Boolean);
+                        onAutoVerifyCommandsChange?.(commands.length ? commands : null);
+                      }}
+                      placeholder="npm test\nnpm run build"
+                      rows={3}
+                      spellCheck={false}
+                      style={{
+                        marginTop: 4, width: "100%", boxSizing: "border-box",
+                        background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 6,
+                        color: "var(--text)", fontSize: 12, fontFamily: "var(--font-mono)",
+                        padding: "6px 8px", resize: "vertical",
+                      }}
+                    />
+                    <div style={{ marginTop: 4, fontSize: 11, color: "var(--text-dim)" }}>
+                      {t("chat.autoVerifyCommandsHint")}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>
+                      {t("chat.autoVerifyRounds", { n: autoVerifyMaxRounds ?? 2 })}
+                    </div>
                   </div>
                 )}
               </div>

@@ -16,7 +16,15 @@ import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
-import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
+import { useAgentSession, type AgentPhase, type AttachedImage, type NoticeItem } from "@/hooks/useAgentSession";
+import {
+  AUTO_VERIFY_MAX_ROUNDS,
+  buildAutoVerifyPrompt,
+  lastTurnWroteFiles,
+  loadAutoVerifySettings,
+  saveAutoVerifySettings,
+  type AutoVerifySettings,
+} from "@/lib/auto-verify";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -259,7 +267,43 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       playDoneSoundRef.current();
     }
     onAgentEnd?.();
+    //  defer 到下一个 macrotask：两个 settle 路径都会先 await loadSession，
+    // 同步读 messages 会拿到旧数据；等 React 刷新后再判断本轮是否写过文件。
+    // handleSend 自带 agentRunning 守卫，defer 不会与用户手动发送竞态。
+    setTimeout(() => maybeAutoVerifyRef.current?.(), 0);
   }, [completionNotificationsEnabled, onAgentEnd]);
+
+  // ---- 单人 Agent 自动验证闭环（对标 Codex：写完自动跑验证，失败继续修） ----
+  const sessionCwd = session?.cwd ?? newSessionCwd ?? undefined;
+  const [autoVerify, setAutoVerify] = useState<AutoVerifySettings>(() => loadAutoVerifySettings(sessionCwd));
+  const autoVerifyRef = useRef(autoVerify);
+  autoVerifyRef.current = autoVerify;
+  const autoVerifyRoundsRef = useRef(0);
+  const autoVerifyAbortedRef = useRef(false);
+  const handleSendRef = useRef<(message: string, images?: AttachedImage[]) => void>(() => {});
+  const handleAbortRef = useRef<() => void>(() => {});
+  // 用户手动发消息 / 中止 run 时，重置自动验证状态，避免给已中止的 run 补验证。
+  const handleManualSend = useCallback((message: string, images?: AttachedImage[]) => {
+    autoVerifyRoundsRef.current = 0;
+    autoVerifyAbortedRef.current = false;
+    return handleSendRef.current(message, images);
+  }, []);
+  const handleManualAbort = useCallback(() => {
+    autoVerifyAbortedRef.current = true;
+    return handleAbortRef.current();
+  }, []);
+  const maybeAutoVerifyRef = useRef<(() => void) | null>(null);
+
+  const updateAutoVerify = useCallback((next: AutoVerifySettings) => {
+    setAutoVerify(next);
+    saveAutoVerifySettings(session?.cwd ?? newSessionCwd ?? undefined, next);
+  }, [session?.cwd, newSessionCwd]);
+
+  // cwd 变化时重载该目录的设置并重置轮数
+  useEffect(() => {
+    setAutoVerify(loadAutoVerifySettings(session?.cwd ?? newSessionCwd ?? undefined));
+    autoVerifyRoundsRef.current = 0;
+  }, [session?.cwd, newSessionCwd]);
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((message: UserMessage) => {
@@ -299,6 +343,23 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
   const sessionBusy = agentRunning || bashRunning;
+
+  // 自动验证闭环的实现：ref 转接保证 wrappedOnAgentEnd（传给 hook 的是首个
+  // render 的闭包）总能拿到最新的 handleSend / messages。
+  handleSendRef.current = handleSend;
+  handleAbortRef.current = handleAbort;
+  maybeAutoVerifyRef.current = () => {
+    const settings = autoVerifyRef.current;
+    if (!settings.enabled) return;
+    if (session?.relation?.kind === "subagent") return;
+    if (autoVerifyAbortedRef.current) { autoVerifyAbortedRef.current = false; return; }
+    const round = autoVerifyRoundsRef.current;
+    if (round >= AUTO_VERIFY_MAX_ROUNDS) return;
+    const cwd = session?.cwd ?? newSessionCwd ?? undefined;
+    if (!lastTurnWroteFiles(messages, activeToolResults, cwd)) return;
+    autoVerifyRoundsRef.current = round + 1;
+    handleSendRef.current(buildAutoVerifyPrompt(round, settings.commands));
+  };
   const [quotedSelection, setQuotedSelection] = useState<{
     text: string;
     top: number;
@@ -445,8 +506,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     if (loading || error || !initialPrompt || initialPromptSentRef.current) return;
     initialPromptSentRef.current = true;
     onInitialPromptConsumed?.();
-    void handleSend(initialPrompt);
-  }, [initialPrompt, loading, error, handleSend, onInitialPromptConsumed]);
+    void handleManualSend(initialPrompt);
+  }, [initialPrompt, loading, error, handleManualSend, onInitialPromptConsumed]);
 
   useEffect(() => {
     if (
@@ -460,8 +521,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
-    registerAbortHandler(sessionBusy ? handleAbort : null);
-  }, [sessionBusy, handleAbort]);
+    registerAbortHandler(sessionBusy ? handleManualAbort : null);
+  }, [sessionBusy, handleManualAbort]);
 
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
@@ -862,8 +923,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
-      onSend={handleSend}
-      onAbort={handleAbort}
+      onSend={handleManualSend}
+      onAbort={handleManualAbort}
       onSteer={agentRunning ? handleSteer : undefined}
       onFollowUp={agentRunning ? handleFollowUp : undefined}
       onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
@@ -883,6 +944,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       compactResult={compactResult}
       toolPreset={toolPreset}
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
+      autoVerifyEnabled={autoVerify.enabled}
+      onAutoVerifyEnabledChange={(enabled) => updateAutoVerify({ ...autoVerify, enabled })}
+      autoVerifyCommands={autoVerify.commands}
+      onAutoVerifyCommandsChange={(commands) => updateAutoVerify({ ...autoVerify, commands })}
+      autoVerifyMaxRounds={AUTO_VERIFY_MAX_ROUNDS}
       thinkingLevel={thinkingLevel}
       isAutoThinkingSelection={isAutoThinkingSelection}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}

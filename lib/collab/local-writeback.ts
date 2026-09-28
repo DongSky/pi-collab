@@ -8,6 +8,8 @@ import { mergeEditorText } from "./editor-merge";
 import { safeSnapshotPath, snapshotExcludedPath } from "./runtime/snapshots";
 import { DomainError } from "./policy";
 import type { EditorWriteback } from "./editor-schema";
+import { getAllowedFileRoots } from "../file-access";
+import { isPathWithinRoots } from "../path-security";
 
 const sha256hex = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 
@@ -150,29 +152,120 @@ export async function forceWriteback(bindingPath: string, docPath: string, conte
  await writeTarget(target, content, existing);
 }
 
-type SavedDocument = { id: string; path: string; content: string; original_text: string | null };
+/**
+ * Move a document's local backing file along with a rename (unbound project).
+ * The local file keeps its directory and takes the new document's basename;
+ * the exact on-disk bytes (including any external modifications) become the
+ * new baseline. Never throws for expected failures.
+ */
+export async function moveDocumentLocalFile(db: PoolClient, newDocId: string, source: { local_path: string; content: string }, newDocPath: string): Promise<EditorWriteback> {
+ try {
+  const oldLocal = source.local_path;
+  const newLocal = path.join(path.dirname(oldLocal), path.basename(newDocPath));
+  const parentReal = realpathSync(path.dirname(newLocal));
+  if (!isPathWithinRoots(parentReal, await getAllowedFileRoots()))
+   return { status: "error", message: "本地路径不在允许访问的目录范围内。" };
+  try {
+   if ((await stat(newLocal)).isDirectory()) return { status: "error", message: "本地已存在同名目录，文件未重命名。" };
+   return { status: "error", message: "本地已存在同名文件，文件未重命名；请先处理该文件。" };
+  } catch (error) {
+   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  let bytes: Buffer;
+  try {
+   await rename(oldLocal, newLocal);
+   bytes = await readFile(newLocal);
+  } catch (error) {
+   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+   // The local file was deleted outside the editor: recreate at the new name.
+   bytes = Buffer.from(source.content, "utf8");
+   await forceWriteback(path.dirname(newLocal), path.basename(newLocal), bytes);
+  }
+  await db.query("SELECT collab.set_document_local_path($1,$2)", [newDocId, newLocal]);
+  await db.query("SELECT collab.record_document_writeback($1,$2,$3)", [newDocId, sha256hex(bytes), bytes]);
+  return { status: "written", scope: "document", localPath: newLocal };
+ } catch (error) {
+  return { status: "error", message: error instanceof Error ? error.message : "本地文件重命名失败" };
+ }
+}
+
+type SavedDocument = { id: string; path: string; content: string; original_text: string | null; local_path?: string | null };
 
 /**
- * Database glue for the save path: loads the binding + per-file baseline,
- * runs the write-back, and records the new baseline. Returns an EditorWriteback
- * for the sync response; write-back never throws.
+ * Run one saved document back to local disk and map the outcome to an
+ * EditorWriteback, recording the new baseline. Never throws for expected
+ * failures; write-back never fails the save itself.
+ *
+ * Resolution order:
+ * 1. the current user's project binding (agents run as the user, so an agent
+ *    acting for a user inherits that user's binding automatically);
+ * 2. the document's own local_path (unbound projects: existing local file);
+ * 3. pure shared draft -> "needs-local-path" so the UI can offer save-as.
+ */
+async function finishOutcome(
+ outcome: WritebackOutcome,
+ record: (bytes: Buffer) => Promise<void>,
+ clear: () => Promise<void>,
+): Promise<{ bytes: Buffer | null } | { conflict: WritebackConflict } | { error: string }> {
+ if (outcome.status === "error") return { error: outcome.message };
+ if (outcome.status === "conflict") return { conflict: outcome.conflict };
+ if (outcome.status === "deleted") { await clear(); return { bytes: null }; }
+ await record(outcome.bytes!);
+ return { bytes: outcome.bytes };
+}
+
+/**
+ * Database glue for the save path: loads the binding (or per-document path) +
+ * baseline, runs the write-back, and records the new baseline. Returns an
+ * EditorWriteback for the sync response; write-back never throws.
  */
 export async function runDocumentWriteback(db: PoolClient, projectId: string, doc: SavedDocument, opts: { deleted: boolean }): Promise<EditorWriteback> {
  try {
-  const binding = (await db.query("SELECT id, local_path AS \"localPath\" FROM collab.project_local_bindings WHERE project_id=$1", [projectId])).rows[0] as { id: string; localPath: string } | undefined;
-  if (!binding) return { status: "unbound" };
-  const state = (await db.query("SELECT written_content AS \"written\" FROM collab.local_writeback_state WHERE binding_id=$1 AND path=$2", [binding.id, doc.path])).rows[0] as { written: Buffer | null } | undefined;
-  const outcome = await performWriteback({
-   bindingPath: binding.localPath, docPath: doc.path,
-   newContent: opts.deleted ? null : doc.content,
-   originalText: doc.original_text ?? "",
-   lastWritten: state?.written ?? null,
-  });
-  if (outcome.status === "error") return { status: "error", message: outcome.message };
-  if (outcome.status === "conflict") return { status: "conflict", localPath: binding.localPath, path: doc.path, conflict: outcome.conflict };
-  if (outcome.status === "deleted") await db.query("SELECT collab.clear_local_writeback($1,$2)", [binding.id, doc.path]);
-  else await db.query("SELECT collab.record_local_writeback($1,$2,$3,$4)", [binding.id, doc.path, sha256hex(outcome.bytes!), outcome.bytes]);
-  return { status: outcome.status, localPath: binding.localPath, path: doc.path };
+  // 1. Per-user project binding.
+  const binding = (await db.query(
+   `SELECT id, local_path AS "localPath" FROM collab.project_local_bindings WHERE project_id=$1 AND owner_user_id = collab.actor()`,
+   [projectId])).rows[0] as { id: string; localPath: string } | undefined;
+  if (binding) {
+   const state = (await db.query("SELECT written_content AS \"written\" FROM collab.local_writeback_state WHERE binding_id=$1 AND path=$2", [binding.id, doc.path])).rows[0] as { written: Buffer | null } | undefined;
+   const outcome = await performWriteback({
+    bindingPath: binding.localPath, docPath: doc.path,
+    newContent: opts.deleted ? null : doc.content,
+    originalText: doc.original_text ?? "",
+    lastWritten: state?.written ?? null,
+   });
+   const done = await finishOutcome(outcome,
+    bytes => db.query("SELECT collab.record_local_writeback($1,$2,$3,$4)", [binding.id, doc.path, sha256hex(bytes), bytes]).then(() => {}),
+    () => db.query("SELECT collab.clear_local_writeback($1,$2)", [binding.id, doc.path]).then(() => {}));
+   if ("error" in done) return { status: "error", message: done.error };
+   if ("conflict" in done) return { status: "conflict", scope: "binding", localPath: binding.localPath, path: doc.path, conflict: done.conflict };
+   return { status: outcome.status as "in-sync" | "written" | "merged" | "deleted", scope: "binding", localPath: binding.localPath, path: doc.path };
+  }
+  // 2. Per-document local path (unbound project, existing local file).
+  // The target must stay inside the app's allowed file roots, the same
+  // boundary the file browser and save-as dialog enforce.
+  const docLocal = doc.local_path ?? null;
+  if (docLocal) {
+   const dir = path.dirname(docLocal);
+   if (!path.isAbsolute(docLocal) || !isPathWithinRoots(dir, await getAllowedFileRoots()))
+    return { status: "error", message: "本地路径不在允许访问的目录范围内。" };
+   const state = (await db.query("SELECT written_content AS \"written\" FROM collab.document_writeback_state WHERE document_id=$1", [doc.id])).rows[0] as { written: Buffer | null } | undefined;
+   const outcome = await performWriteback({
+    bindingPath: dir, docPath: path.basename(docLocal),
+    newContent: opts.deleted ? null : doc.content,
+    originalText: doc.original_text ?? "",
+    lastWritten: state?.written ?? null,
+   });
+   const done = await finishOutcome(outcome,
+    bytes => db.query("SELECT collab.record_document_writeback($1,$2,$3)", [doc.id, sha256hex(bytes), bytes]).then(() => {}),
+    () => db.query("SELECT collab.clear_document_writeback($1)", [doc.id]).then(() => {}));
+   if ("error" in done) return { status: "error", message: done.error };
+   if ("conflict" in done) return { status: "conflict", scope: "document", localPath: docLocal, conflict: done.conflict };
+   return { status: outcome.status as "in-sync" | "written" | "merged" | "deleted", scope: "document", localPath: docLocal };
+  }
+  // 3. Pure shared draft: a deleted draft has no local file; a live one can
+  // be saved-as to local from the UI.
+  if (opts.deleted) return { status: "unbound" };
+  return { status: "needs-local-path" };
  } catch (error) {
   return { status: "error", message: error instanceof Error ? error.message : "本地回写失败" };
  }

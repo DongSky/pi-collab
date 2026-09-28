@@ -8,7 +8,7 @@ import { asUser } from "./database";
 import { DomainError } from "./policy";
 import { loadSnapshot, safeSnapshotPath, snapshotExcludedPath, snapshotHasSecret } from "./runtime/snapshots";
 import { documentSaveAs, documentInput, documentSync, editorAction, editorOpen, type EditorDetail, type EditorSession, type EditorSync, type EditorWriteback } from "./editor-schema";
-import { runDocumentWriteback } from "./local-writeback";
+import { runDocumentWriteback, moveDocumentLocalFile } from "./local-writeback";
 const root = () => process.env.PI_COLLAB_DATA_DIR ?? path.resolve(".local");
 const invalid = () => new DomainError("editor_content_unavailable", "此文件包含受限路径、非文本内容或超出共编限制。", 400);
 export function validateEditorPath(file: string) { if (!safeSnapshotPath(file) || snapshotExcludedPath(file)) throw invalid(); }
@@ -106,9 +106,9 @@ export function syncDocument(userId: string,id: string,raw: unknown): Promise<Ed
 }
 
 /** Atomic copy of an acknowledged shared file; never overwrite a peer's destination. */
-export function saveDocumentAs(userId:string,id:string,raw:unknown):Promise<{id:string;path:string}> { return copyOrMoveDocument(userId,id,raw,false); }
-export function renameDocument(userId:string,id:string,raw:unknown):Promise<{id:string;path:string}> { return copyOrMoveDocument(userId,id,raw,true); }
-function copyOrMoveDocument(userId:string,id:string,raw:unknown,move:boolean):Promise<{id:string;path:string}> {
+export function saveDocumentAs(userId:string,id:string,raw:unknown):Promise<{id:string;path:string;writeback?:EditorWriteback}> { return copyOrMoveDocument(userId,id,raw,false); }
+export function renameDocument(userId:string,id:string,raw:unknown):Promise<{id:string;path:string;writeback?:EditorWriteback;deleteWriteback?:EditorWriteback}> { return copyOrMoveDocument(userId,id,raw,true); }
+function copyOrMoveDocument(userId:string,id:string,raw:unknown,move:boolean):Promise<{id:string;path:string;writeback?:EditorWriteback;deleteWriteback?:EditorWriteback}> {
  z.uuid().parse(id);const input=documentSaveAs.parse(raw);validateEditorPath(input.path);
  return asUser(userId,async db=>{
   await db.query("SELECT collab.editor_lock($1,true,false)",[id]);const s=await session(db,id);
@@ -120,7 +120,37 @@ function copyOrMoveDocument(userId:string,id:string,raw:unknown,move:boolean):Pr
   const paths=[...saved.manifest.worktree.map(f=>f.path),...(await db.query("SELECT path FROM collab.editor_documents WHERE session_id=$1",[id])).rows.map(r=>r.path as string)];
   if(paths.some(p=>p===input.path||p.startsWith(`${input.path}/`)||input.path.startsWith(`${p}/`)))throw new DomainError("editor_target_exists","目标路径已存在或与文件目录冲突，请使用新文件名。",409);
   validateEditorText(source.content);const doc=new Y.Doc();
-  try{doc.getText("code").insert(0,source.content);const result=await db.query("SELECT collab.save_editor_document($1,$2,NULL,'',$3,$4,0,false) AS id",[id,input.path,source.content,Buffer.from(Y.encodeStateAsUpdate(doc))]);if(move)await db.query("SELECT collab.save_editor_document($1,$2,$3,$4,$5,$6,$7,true)",[id,source.path,source.base_hash,source.original_text,source.content,source.y_state,source.revision]);return {id:result.rows[0].id,path:input.path};}finally{doc.destroy();}
+  // Write-back never fails the copy/move itself.
+  const wbCatch=(p:Promise<EditorWriteback>):Promise<EditorWriteback>=>p.catch(error=>({status:"error",message:error instanceof Error?error.message:"本地回写失败"} as EditorWriteback));
+  try{doc.getText("code").insert(0,source.content);
+   const result=await db.query("SELECT collab.save_editor_document($1,$2,NULL,'',$3,$4,0,false) AS id",[id,input.path,source.content,Buffer.from(Y.encodeStateAsUpdate(doc))]);
+   const newId=result.rows[0].id as string;
+   let writeback:EditorWriteback|undefined,deleteWriteback:EditorWriteback|undefined;
+   if(move){
+    await db.query("SELECT collab.save_editor_document($1,$2,$3,$4,$5,$6,$7,true)",[id,source.path,source.base_hash,source.original_text,source.content,source.y_state,source.revision]);
+    if(source.local_path){
+     // Unbound project with a local-backed source: the local file follows the rename.
+     const moved=await moveDocumentLocalFile(db,newId,{local_path:source.local_path,content:source.content},input.path);
+     if(moved.status==="error")deleteWriteback=moved;
+     else{
+      // The old (now deleted) row's file was renamed away: drop its stale
+      // local_path and baseline so a future reopen can't resurrect the old name.
+      // On move failure the file is untouched, so the association stays.
+      await db.query("UPDATE collab.editor_documents SET local_path=NULL WHERE id=$1",[source.id]);
+      await db.query("SELECT collab.clear_document_writeback($1)",[source.id]);
+     }
+    }else{
+     // Bound project (or pure draft): write the new path, safe-delete the old.
+     writeback=await wbCatch(runDocumentWriteback(db,s.project_id,{id:newId,path:input.path,content:source.content,original_text:"",local_path:null},{deleted:false}));
+     deleteWriteback=await wbCatch(runDocumentWriteback(db,s.project_id,{id:source.id,path:source.path,content:source.content,original_text:source.original_text,local_path:null},{deleted:true}));
+    }
+   }else{
+    // Copy: the new document starts without local backing; a bound project
+    // writes it back, an unbound one will offer save-as on the next save.
+    writeback=await wbCatch(runDocumentWriteback(db,s.project_id,{id:newId,path:input.path,content:source.content,original_text:"",local_path:null},{deleted:false}));
+   }
+   return {id:newId,path:input.path,writeback,deleteWriteback};
+  }finally{doc.destroy();}
  });
 }
 

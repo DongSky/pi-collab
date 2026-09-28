@@ -40,7 +40,7 @@ export function LocalBindingPanel({ projectId, canManage }: { projectId: string;
  return <details className="wb-local-binding" open={open} onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}>
   <summary>本地目录关联{ binding ? <span className="collab-muted collab-small"> · 已回写</span> : null}</summary>
   <div className="wb-local-binding-body">
-   <p className="collab-muted collab-small">保存后自动写回你指定的本机目录（服务端可访问的路径），遇到外部修改会三方合并而不是覆盖。未关联时保持现有协作副本流程：保存到共享草稿，通过 Git 分支交付。</p>
+   <p className="collab-muted collab-small">保存后自动写回你指定的本机目录（服务端可访问的路径），遇到外部修改会三方合并而不是覆盖。关联仅对当前用户生效，代表你运行的 Agent 自动继承。未关联时保持现有协作副本流程：保存到共享草稿，通过 Git 分支交付；单个文件也可通过编辑器「另存为到本地」关联本机文件。</p>
    {binding ? <p role="status">已关联 <code>{binding.localPath}</code></p> : <p className="collab-muted" role="status">未关联本地目录</p>}
    {error && <p className="collab-error" role="alert">{error}</p>}
    {canManage && (binding
