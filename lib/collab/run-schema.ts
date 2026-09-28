@@ -3,7 +3,8 @@ const uuid = z.uuid();
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 // Simplification: allow a local working directory path directly (Codex/Cursor-style),
 // instead of requiring a pre-imported repositoryId. The server will import it
-// on-the-fly as a lightweight local repository.
+// on-the-fly as a lightweight local repository. If the project has a bound
+// local directory, it is used by default when neither is specified.
 export const runInput = z.object({
   repositoryId: uuid.optional(),
   workingDirectory: z.string().trim().min(1).max(1024).optional(),
@@ -13,6 +14,6 @@ export const runInput = z.object({
   modelProfileId: uuid.optional(), executionKind: z.enum(["ai","terminal"]).default("ai"),
   snapshotId: uuid.optional(), suggestionId: uuid.optional(), editorVersionId: uuid.optional(),
 }).strict().refine(
-  (v) => (v.repositoryId ? 1 : 0) + (v.workingDirectory ? 1 : 0) === 1,
-  { message: "Provide exactly one of repositoryId or workingDirectory" }
+  (v) => (v.repositoryId ? 1 : 0) + (v.workingDirectory ? 1 : 0) <= 1,
+  { message: "Provide at most one of repositoryId or workingDirectory" }
 );

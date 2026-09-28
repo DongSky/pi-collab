@@ -90,15 +90,25 @@ export function startRun(userId: string, taskId: string, raw: z.input<typeof run
   return asUser(userId, async db => {
     let repositoryId = input.repositoryId;
     let baseSha = input.baseSha;
+    const task = (await db.query("SELECT project_id FROM collab.tasks WHERE id=$1", [taskId])).rows[0];
+    if (!task) throw new DomainError("not_found", "任务不存在或不可访问。", 404);
+    const projectId = String(task.project_id);
     // Simplification: workingDirectory → auto-import as repository
     if (input.workingDirectory) {
-      const task = (await db.query("SELECT project_id FROM collab.tasks WHERE id=$1", [taskId])).rows[0];
-      if (!task) throw new DomainError("not_found", "任务不存在或不可访问。", 404);
-      const imported = await ensureLocalRepository(db, userId, String(task.project_id), input.workingDirectory, baseSha);
+      const imported = await ensureLocalRepository(db, userId, projectId, input.workingDirectory, baseSha);
       repositoryId = imported.repositoryId;
       baseSha = imported.baseSha;
     }
-    if (!repositoryId || !baseSha) throw new DomainError("invalid_input", "需要提供 repositoryId 或 workingDirectory", 400);
+    // Cursor-style: if the project has a bound local directory, use it by default
+    if (!repositoryId) {
+      const binding = (await db.query("SELECT local_path FROM collab.project_local_bindings WHERE project_id=$1", [projectId])).rows[0];
+      if (binding) {
+        const imported = await ensureLocalRepository(db, userId, projectId, String(binding.local_path), baseSha);
+        repositoryId = imported.repositoryId;
+        baseSha = imported.baseSha;
+      }
+    }
+    if (!repositoryId || !baseSha) throw new DomainError("invalid_input", "需要提供 repositoryId、workingDirectory，或为项目绑定本地目录", 400);
     return (await db.query("SELECT collab.submit_work_run($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS result", [taskId, repositoryId, baseSha, input.prompt, process.env.PI_COLLAB_RUNTIME ?? "native", input.idempotencyKey, input.expectedVersion, input.modelProfileId ?? null, input.snapshotId ?? null, input.suggestionId ?? null, input.editorVersionId ?? null, input.executionKind])).rows[0].result;
   });
 }

@@ -5,7 +5,7 @@ import { asUser } from "./database";
 import { DomainError, requireCapability, type Capability, type ProjectRole } from "./policy";
 
 export const uuid = z.uuid();
-export const projectInput = z.object({ organizationId: uuid, name: z.string().trim().min(1).max(120), description: z.string().max(5000).default("") }).strict();
+export const projectInput = z.object({ organizationId: uuid, name: z.string().trim().min(1).max(120), description: z.string().max(5000).default(""), workingDirectory: z.string().trim().min(1).max(4096).optional() }).strict();
 
 export async function projectRole(client: PoolClient, projectId: string, capability: Capability) {
   const result = await client.query<{ role: ProjectRole | null }>("SELECT collab.project_role($1) AS role", [projectId]);
@@ -34,8 +34,25 @@ export function createProject(userId: string, input: z.infer<typeof projectInput
     // RETURNING would apply SELECT RLS before the creator membership exists.
     await client.query("INSERT INTO collab.projects(id,organization_id,name,description,created_by) VALUES($1,$2,$3,$4,$5)", [id, input.organizationId, input.name, input.description, userId]);
     await client.query("INSERT INTO collab.project_memberships(organization_id,project_id,user_id,role) VALUES($1,$2,$3,'maintainer')", [input.organizationId, id, userId]);
+    // Cursor-style: importing a working directory creates the project AND binds
+    // the directory, so the user can start editing/vibe-coding immediately.
+    let binding: { id: string; projectId: string; localPath: string } | null = null;
+    if (input.workingDirectory) {
+      const { validateBindingPath } = await import("./local-binding");
+      const { allowFileRoot } = await import("../file-access");
+      const localPath = validateBindingPath(input.workingDirectory);
+      try {
+        const result = (await client.query("SELECT collab.set_project_local_binding($1,$2) AS result", [id, localPath])).rows[0].result as { id: string; projectId: string; localPath: string };
+        binding = result;
+        allowFileRoot(localPath);
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") throw new DomainError("local_binding_conflict", "此本地目录已关联到另一个项目，请先解绑或选择其他目录。", 409);
+        throw error;
+      }
+    }
     await audit(client, input.organizationId, id, userId, "project.created", id);
-    return (await client.query("SELECT * FROM collab.projects WHERE id=$1", [id])).rows[0];
+    const project = (await client.query("SELECT * FROM collab.projects WHERE id=$1", [id])).rows[0];
+    return binding ? { ...project, binding } : project;
   });
 }
 
