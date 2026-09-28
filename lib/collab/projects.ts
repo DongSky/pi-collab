@@ -52,7 +52,18 @@ export function createProject(userId: string, input: z.infer<typeof projectInput
     }
     await audit(client, input.organizationId, id, userId, "project.created", id);
     const project = (await client.query("SELECT * FROM collab.projects WHERE id=$1", [id])).rows[0];
-    return binding ? { ...project, binding } : project;
+    // Cursor-style: when importing a working directory, auto-create a default task
+    // so the user can start vibe-coding immediately without manually creating a task.
+    let defaultTask: { id: string; title: string } | null = null;
+    if (input.workingDirectory) {
+      const task = (await client.query(
+        "INSERT INTO collab.tasks(organization_id,project_id,title,description,owner_id,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,title",
+        [input.organizationId, id, "代码助手", "导入工作目录时自动创建。在这里直接与 AI 对话，让它帮你改代码、解释代码或执行任务。", userId, userId]
+      )).rows[0];
+      await audit(client, input.organizationId, id, userId, "task.created", task.id);
+      defaultTask = task;
+    }
+    return binding ? { ...project, binding, defaultTask } : project;
   });
 }
 

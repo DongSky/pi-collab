@@ -124,8 +124,13 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
     try {
       if (form === "project") {
         const workingDirectory = String(fields.get("workingDirectory") ?? "").trim();
-        const project = await api<Project>("projects", { name: fields.get("name"), description: fields.get("description"), organizationId: fields.get("organizationId"), ...(workingDirectory ? { workingDirectory } : {}) });
+        const project = await api<Project & { defaultTask?: { id: string } }>("projects", { name: fields.get("name"), description: fields.get("description"), organizationId: fields.get("organizationId"), ...(workingDirectory ? { workingDirectory } : {}) });
         await loadCatalogue(); setSelected(project.id);
+        // Cursor-style: if a default task was auto-created (working directory import),
+        // open it immediately so the user can start vibe-coding.
+        if (project.defaultTask) {
+          await reload(); setOpenTask(project.defaultTask.id);
+        }
       } else {
         const created = await api<Task>(`projects/${selected}/tasks`, { title: fields.get("title"), description: fields.get("description"), acceptance: fields.get("acceptance") });
         await reload(); setOpenTask(created.id);
