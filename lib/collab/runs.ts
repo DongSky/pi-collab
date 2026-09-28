@@ -29,40 +29,47 @@ async function ensureLocalRepository(
   baseSha?: string,
 ): Promise<{ repositoryId: string; baseSha: string }> {
   const absPath = path.resolve(workingDirectory);
-  // Verify it's a directory with a git repo (or at least exists)
+  // Verify the directory exists
+  try {
+    const stat = await import("node:fs/promises").then(m => m.stat(absPath));
+    if (!stat.isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new DomainError("invalid_working_directory", `工作目录不存在或不可访问: ${absPath}`, 400);
+  }
+
+  // Try to get Git SHA, but don't require it (support non-Git directories)
   let resolvedSha = baseSha;
   if (!resolvedSha) {
     try {
       const { stdout } = await exec("git", ["-C", absPath, "rev-parse", "HEAD"], { timeout: 10000 });
       resolvedSha = stdout.trim();
     } catch {
-      throw new DomainError("invalid_working_directory", `工作目录不是有效的 Git 仓库: ${absPath}`, 400);
+      // Not a Git repo - we'll init one at the managed location
+      resolvedSha = "";
     }
   }
-  if (!/^[a-f0-9]{40}$/.test(resolvedSha)) {
-    throw new DomainError("invalid_base_sha", "baseSha 必须是完整的 40 位 commit SHA", 400);
-  }
 
-  // Check if we already imported this path (by name convention)
-  const dirName = path.basename(absPath);
+  // Check if we already imported this path (dedup by full normalized path, not basename)
+  // This fixes collisions where two different directories have the same folder name.
   const existing = await db.query(
-    "SELECT id, base_sha FROM collab.repositories WHERE project_id=$1 AND name=$2 AND provider='local' ORDER BY created_at DESC LIMIT 1",
-    [projectId, dirName]
+    "SELECT id, base_sha FROM collab.repositories WHERE project_id=$1 AND provider='local' AND source_path=$2 ORDER BY created_at DESC LIMIT 1",
+    [projectId, absPath]
   );
   if (existing.rows[0]) {
-    return { repositoryId: String(existing.rows[0].id), baseSha: resolvedSha };
+    return { repositoryId: String(existing.rows[0].id), baseSha: resolvedSha || String(existing.rows[0].base_sha) };
   }
 
-  // Create new repository record
+  // Create new repository record (store source_path for dedup and writeback)
   const repositoryId = randomUUID();
+  const dirName = path.basename(absPath);
   const dataRoot = path.resolve(process.env.PI_COLLAB_DATA_DIR ?? ".local");
   const repoPath = path.join(dataRoot, "repositories", repositoryId, "git");
 
   await projectRole(db, projectId, "task.create");
   await db.query(
-    "INSERT INTO collab.repositories (id, organization_id, project_id, name, provider, base_sha, default_branch) " +
-    "SELECT $1, organization_id, $2, $3, 'local', $4, 'main' FROM collab.projects WHERE id=$2",
-    [repositoryId, projectId, dirName.slice(0, 120), resolvedSha]
+    "INSERT INTO collab.repositories (id, organization_id, project_id, name, provider, base_sha, default_branch, source_path) " +
+    "SELECT $1, organization_id, $2, $3, 'local', $4, 'main', $5 FROM collab.projects WHERE id=$2",
+    [repositoryId, projectId, dirName.slice(0, 120), resolvedSha || "0000000000000000000000000000000000000000", absPath]
   );
 
   // Copy the working directory to the managed location

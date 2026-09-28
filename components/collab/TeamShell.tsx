@@ -78,12 +78,13 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
       else { try { const saved=JSON.parse(sessionStorage.getItem(`pi-collab:tabs:${user.id}:${selected}`)??"null");if(saved&&Array.isArray(saved.tabs)){const ids=saved.tabs.filter((id:unknown)=>typeof id==="string"&&next.tasks.some(t=>t.id===id)).slice(0,32);setTabs(ids);setActiveTask(ids.includes(saved.active)?saved.active:null);} restoreFiles(sessionStorage.getItem(`pi-collab:files:${user.id}:${selected}`),selected,next.tasks.map(t=>t.id)); }catch{} } } }).catch(e => { if (!scope.closed && scope.generation === 0) setError(e.message); });
     return () => { scope.closed = true; };
   }, [selected,setOpenTask,user.id,resetFiles,restoreFiles]);
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (projectId?: string) => {
     const scope = detailRequest.current;
-    if (!selected || scope.closed || scope.project !== selected) return;
+    const target = projectId ?? selected;
+    if (!target || scope.closed || scope.project !== target) return;
     const generation = ++scope.generation;
     try {
-      const next = await api<Detail>(`projects/${selected}`);
+      const next = await api<Detail>(`projects/${target}`);
       if (!scope.closed && scope.generation === generation) setDetail(next);
     }
     catch (error) {
@@ -125,11 +126,14 @@ export function TeamShell({ user, runtime }: { user: User; runtime: string }) {
       if (form === "project") {
         const workingDirectory = String(fields.get("workingDirectory") ?? "").trim();
         const project = await api<Project & { defaultTask?: { id: string } }>("projects", { name: fields.get("name"), description: fields.get("description"), organizationId: fields.get("organizationId"), ...(workingDirectory ? { workingDirectory } : {}) });
-        await loadCatalogue(); setSelected(project.id);
+        await loadCatalogue();
         // Cursor-style: if a default task was auto-created (working directory import),
         // open it immediately so the user can start vibe-coding.
+        // Note: setSelected triggers a useEffect that loads project detail;
+        // set the open task directly from the creation response.
+        setSelected(project.id);
         if (project.defaultTask) {
-          await reload(); setOpenTask(project.defaultTask.id);
+          setOpenTask(project.defaultTask.id);
         }
       } else {
         const created = await api<Task>(`projects/${selected}/tasks`, { title: fields.get("title"), description: fields.get("description"), acceptance: fields.get("acceptance") });
