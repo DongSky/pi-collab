@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { sealCredential, type ProviderSecret } from "./credentials";
-import { asUser } from "../database";
+import { asUser, setupSession } from "../database";
 import { projectRole, uuid } from "../projects";
 
 const profileInput = z.object({
@@ -19,7 +19,7 @@ export async function registerModelProfile(admin: Pool, key: Buffer, raw: z.inpu
   if (input.dailyTokenLimit < input.contextWindow + input.maxOutputTokens) throw new Error("Project daily budget must cover one context/output reservation");
   const client = await admin.connect();
   try {
-    await client.query("BEGIN"); await client.query("SELECT set_config('collab.user_id',$1,true)", [input.actorId]);
+    await client.query("BEGIN"); await setupSession(client, input.actorId);
     const project = (await client.query("SELECT organization_id FROM collab.projects WHERE id=$1 AND collab.project_role(id)='maintainer'", [input.projectId])).rows[0];
     if (!project) throw new Error("Model registration requires an active project maintainer");
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,811))", [project.organization_id]);
