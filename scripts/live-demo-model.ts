@@ -20,7 +20,7 @@ const model = selected?.models?.find((m: { id: string }) => m.id === values.mode
 if (!model || (model.api ?? selected.api) !== "openai-responses" || typeof selected.apiKey !== "string" || selected.apiKey.startsWith("!") || selected.headers || model.headers)
   throw new Error("The selected Pi configuration requires manual supported import; no command or environment secret resolution is performed");
 const pool = new Pool({ connectionString: connectionString(await localConfig(), true) });
-const key = await masterKey(path.join(dataRoot, "model-master.key"));
+const key = await masterKey(path.join(dataRoot, "model-master.key"), true);
 try {
   const current = state.modelProfileId ? (await pool.query("SELECT p.id,p.project_id,p.model_id,p.context_window,c.sealed FROM collab.model_profiles p JOIN collab_gateway.credentials c ON c.profile_id=p.id WHERE p.id=$1 AND p.project_id=$2", [state.modelProfileId, state.projectId])).rows[0] : null;
   const secret = current ? openCredential(key, current.id, current.project_id, current.sealed) : null;
