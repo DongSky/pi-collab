@@ -11,7 +11,7 @@ const inputItem = z.union([
   z.object({ type: z.literal("message").optional(), role: z.enum(["user", "assistant", "system", "developer"]), content: z.union([z.string(), z.array(textPart)]), id: z.string().optional(), phase: z.enum(["commentary", "final_answer"]).optional(), status: z.enum(["completed", "in_progress", "incomplete"]).optional() }).strict(),
   z.object({ type: z.literal("function_call"), call_id: z.string(), name: z.string(), arguments: z.string(), id: z.string().optional(), status: z.enum(["completed", "in_progress", "incomplete"]).optional() }).strict(),
   z.object({ type: z.literal("function_call_output"), call_id: z.string(), output: z.string(), id: z.string().optional() }).strict(),
-  z.object({ type: z.literal("reasoning"), id: z.string(), encrypted_content: z.string().nullable().optional(), summary: z.array(z.object({ type: z.literal("summary_text"), text: z.string() }).strict()), content: z.array(z.object({ type: z.literal("reasoning_text"), text: z.string() }).strict()).optional(), status: z.string().optional() }).strict(),
+  z.object({ type: z.literal("reasoning"), id: z.string(), encrypted_content: z.string().nullable().optional(), format: z.string().optional(), summary: z.array(z.object({ type: z.literal("summary_text"), text: z.string() }).strict()), content: z.array(z.object({ type: z.literal("reasoning_text"), text: z.string() }).strict()).optional(), status: z.string().optional() }).strict(),
 ]);
 const bodySchema = z.object({
   model: z.string(), input: z.union([z.string(), z.array(inputItem).max(2000)]), instructions: z.string().optional(),

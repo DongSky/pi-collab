@@ -1,12 +1,25 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, realpath, writeFile, stat, lstat } from "node:fs/promises";
+import { writeFileSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
 const exec = promisify(execFile);
 export interface WorkspaceLocation {
   port?: number; id: string; root: string; checkout: string; agentDir: string; home: string; baseSha: string; branch: string;
+}
+
+/** Broker-owned gitconfig that keeps user/system config ignored but allows git
+ *  to operate on broker-owned repositories regardless of OS file ownership
+ *  (e.g. data restored by a different user). Content is static and safe. */
+function brokerGitConfig(): string {
+  const file = path.join(os.tmpdir(), "pi-collab-gitconfig");
+  if (!existsSync(file)) {
+    writeFileSync(file, "[safe]\n\tdirectory = *\n", { mode: 0o644, flag: "wx" });
+  }
+  return file;
 }
 
 export function runnerEnvironment(home: string, agentDir: string): NodeJS.ProcessEnv {
@@ -16,7 +29,7 @@ export function runnerEnvironment(home: string, agentDir: string): NodeJS.Proces
     PI_OFFLINE: "1", PI_TELEMETRY: "0",
     PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
     LANG: "en_US.UTF-8", TERM: "dumb", GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: brokerGitConfig(),
   };
   // Next declares NODE_ENV required on process.env, but a child receives a fresh dictionary.
   return environment as NodeJS.ProcessEnv;
